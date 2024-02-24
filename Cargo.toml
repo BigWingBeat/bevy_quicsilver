@@ -17,3 +17,6 @@ rustls = { version = "0.21", default-features = false, features = ["logging", "d
 rustls-native-certs = { version = "0.6", optional = true }
 rcgen = { version = "0.11", default-features = false }
 thiserror = "1.0"
+
+[features]
+default = ["rustls-native-certs"]
