@@ -1,8 +1,19 @@
 [package]
 name = "bevy_quinntegration"
 version = "0.1.0"
+authors = ["Pixelstorm"]
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "Integrates quinn_proto with bevy_ecs"
+repository = "https://github.com/Pixelstormer/bevy_quinntegration"
+license = "Apache-2.0"
+keywords = ["bevy", "quic", "gamedev", "networking"]
+categories = ["game-development", "network-programming"]
 
 [dependencies]
+bevy_ecs = { version = "0.13", default-features = false }
+quinn-proto = "0.10"
+quinn-udp = "0.4"
+rustls = { version = "0.21", default-features = false, features = ["logging", "dangerous_configuration"] }
+rustls-native-certs = { version = "0.6", optional = true }
+rcgen = { version = "0.11", default-features = false }
+thiserror = "1.0"
