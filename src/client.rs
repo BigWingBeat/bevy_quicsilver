@@ -1,11 +1,8 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use bevy::{
-    app::{App, Plugin},
-    ecs::system::Resource,
-};
-use coalescence_proto::{packet::OutboundPacket, serialize, Channel, ProtoPlugin};
-use quinn_proto::{ConnectionHandle, Dir, EndpointConfig, StreamId};
+use bevy_app::{App, Plugin};
+use bevy_ecs::system::Resource;
+use quinn_proto::{Dir, EndpointConfig};
 
 use crate::{allow_mtud, connection::Connection, Error};
 
@@ -28,8 +25,6 @@ impl ClientPlugin {
 
 impl Plugin for ClientPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(ProtoPlugin);
-
         let endpoint = quinn_proto::Endpoint::new(EndpointConfig::default(), None, allow_mtud());
         let config = quinn_proto::ClientConfig::new(Arc::new(self.crypto));
 

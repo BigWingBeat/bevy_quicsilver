@@ -1,19 +1,14 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use bevy::{
-    app::{App, Plugin, Update},
-    ecs::{
-        bundle::Bundle,
-        component::Component,
-        entity::Entity,
-        event::{Event, EventWriter},
-        system::{CommandQueue, Commands, Query, Resource},
-        world::World,
-    },
-    log::info,
-    tasks::IoTaskPool,
+use bevy_app::{App, Plugin, Update};
+use bevy_ecs::{
+    bundle::Bundle,
+    component::Component,
+    entity::Entity,
+    event::{Event, EventWriter},
+    system::{CommandQueue, Commands, Query, Resource},
+    world::World,
 };
-use coalescence_proto::ProtoPlugin;
 use quinn_proto::{Endpoint, EndpointConfig};
 
 use crate::{allow_mtud, ip::IPV6_WILDCARD_DEFAULT_PORT, Error};
@@ -36,8 +31,6 @@ impl ServerPlugin {
 
 impl Plugin for ServerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(ProtoPlugin);
-
         let endpoint = Endpoint::new(
             EndpointConfig::default(),
             Some(quinn_proto::ServerConfig::with_crypto(Arc::new(

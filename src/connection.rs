@@ -1,31 +1,18 @@
-use async_channel::{Receiver, Sender};
-use bevy::{
-    ecs::{
-        bundle::Bundle,
-        component::Component,
-        event::{EventReader, EventWriter},
-        system::{Query, Res, ResMut, Resource},
-    },
-    time::{Real, Time, Timer, TimerMode},
-    utils::{EntityHashMap, EntityHashSet},
+use bevy_ecs::{
+    component::Component,
+    entity::EntityHash,
+    event::{EventReader, EventWriter},
+    system::{Query, Res},
 };
+use bevy_time::{Real, Time, Timer, TimerMode};
 use bytes::Bytes;
-use coalescence_proto::{
-    packet::OutboundPacket, serialize, Channel, OrderedReliableBuffer, PacketsBundle,
-};
-use quinn_proto::{ConnectionHandle, Dir, Event, StreamEvent, StreamId, WriteError};
+use hashbrown::HashMap;
+use quinn_proto::{ConnectionHandle, Dir, Event, StreamEvent, StreamId};
 
-use crate::{
-    endpoint::{ConnectionEvent, Endpoint},
-    Error, ErrorKind,
-};
+use crate::endpoint::{ConnectionEvent, Endpoint};
 
 use std::{
-    collections::VecDeque,
-    future::Future,
     iter,
-    pin::Pin,
-    task::{ready, Context, Poll},
     time::{Duration, Instant},
 };
 
@@ -35,9 +22,7 @@ pub(crate) struct EndpointEvent {
     event: quinn_proto::EndpointEvent,
 }
 
-#[derive(Debug)]
-#[cfg_attr(feature = "client", derive(Resource))]
-#[cfg_attr(feature = "server", derive(Component))]
+#[derive(Debug, Component)]
 pub struct Connection {
     handle: ConnectionHandle,
     connection: quinn_proto::Connection,
@@ -45,7 +30,7 @@ pub struct Connection {
     timeout_timer: Option<(Timer, Instant)>,
     should_poll: bool,
     pending_streams: Vec<Bytes>,
-    pending_writes: EntityHashMap<StreamId, Vec<Bytes>>,
+    pending_writes: HashMap<StreamId, Vec<Bytes>, EntityHash>,
 }
 
 impl Connection {
@@ -57,7 +42,7 @@ impl Connection {
             timeout_timer: None,
             should_poll: false,
             pending_streams: Vec::new(),
-            pending_writes: EntityHashMap::new(),
+            pending_writes: HashMap::new(),
         }
     }
 

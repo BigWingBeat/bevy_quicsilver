@@ -45,8 +45,8 @@ impl<S: ConfigSide> ConfigBuilderExt<S> for ConfigBuilder<S, WantsCipherSuites> 
 pub mod client {
     use std::sync::Arc;
 
-    use bevy::log::warn;
     use rustls::{client::ServerCertVerifier, ClientConfig, RootCertStore};
+    use tracing::warn;
 
     use super::ConfigBuilderExt;
 
@@ -64,7 +64,7 @@ pub mod client {
                 }
             }
             Err(e) => {
-                warn!("Could not load platform native root certs: {}", e);
+                warn!("Could not load platform native root certs: {e}");
             }
         };
 

@@ -10,13 +10,18 @@ keywords = ["bevy", "quic", "gamedev", "networking"]
 categories = ["game-development", "network-programming"]
 
 [dependencies]
+bevy_app = { version = "0.13", default-features = false }
 bevy_ecs = { version = "0.13", default-features = false }
-quinn-proto = "0.10"
-quinn-udp = "0.4"
+bevy_time = "0.13"
+hashbrown = "0.14"
+bytes = "1.5"
+thiserror = "1.0"
+quinn-proto = { version = "0.10", default-features = false, features = ["tls-rustls"] }
+quinn-udp = { version = "0.4", default-features = false }
 rustls = { version = "0.21", default-features = false, features = ["logging", "dangerous_configuration"] }
 rustls-native-certs = { version = "0.6", optional = true }
 rcgen = { version = "0.11", default-features = false }
-thiserror = "1.0"
+tracing = { version = "0.1", default-features = false, features = ["std"] }
 
 [features]
 default = ["rustls-native-certs"]

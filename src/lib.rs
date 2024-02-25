@@ -3,16 +3,12 @@ use rcgen::RcgenError;
 use runtime::BevyTasksRuntime;
 use thiserror::Error;
 
+mod client;
 pub mod connection;
 pub mod crypto;
 mod endpoint;
 pub mod ip;
 mod runtime;
-
-#[cfg(feature = "client")]
-mod client;
-
-#[cfg(feature = "server")]
 mod server;
 
 pub(crate) fn allow_mtud() -> bool {
@@ -42,8 +38,6 @@ where
 pub(crate) enum ErrorKind {
     #[error("The stream was finished unexpectedly")]
     StreamFinished,
-    #[error(transparent)]
-    Proto(#[from] coalescence_proto::Error),
     #[error(transparent)]
     Connection(#[from] ConnectionError),
     #[error(transparent)]

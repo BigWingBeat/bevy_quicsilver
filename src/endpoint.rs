@@ -1,12 +1,10 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use bevy::{
-    ecs::{
-        entity::Entity,
-        system::{CommandQueue, Resource},
-    },
-    utils::{default, EntityHashMap},
+use bevy_ecs::{
+    entity::{Entity, EntityHash},
+    system::{CommandQueue, Resource},
 };
+use hashbrown::HashMap;
 use quinn_proto::{ConnectionHandle, EndpointConfig};
 use quinn_udp::UdpState;
 
@@ -21,7 +19,7 @@ pub(crate) struct ConnectionEvent {
 #[derive(Debug, Resource)]
 pub(crate) struct Endpoint {
     pub(crate) endpoint: quinn_proto::Endpoint,
-    pub(crate) connections: EntityHashMap<ConnectionHandle, Entity>,
+    pub(crate) connections: HashMap<ConnectionHandle, Entity, EntityHash>,
     pub(crate) udp_state: UdpState,
 }
 
@@ -46,8 +44,8 @@ impl Endpoint {
                 queue.push(|&mut world| {
                     world.insert_resource(endpoint);
                     world.spawn(ConnectionBundle::<Client> {
-                        connection: Connection { id, connection },
-                        proto: default(),
+                        connection: Connection::new(id, connection),
+                        proto: Default::default(),
                     })
                 });
                 queue
