@@ -1,24 +1,20 @@
 use quinn_proto::{ConnectionError, ReadError, SendDatagramError, WriteError};
 use rcgen::RcgenError;
-use runtime::BevyTasksRuntime;
 use thiserror::Error;
+
+pub use quinn_proto::{ClientConfig, ServerConfig};
 
 mod client;
 pub mod connection;
 pub mod crypto;
 mod endpoint;
 pub mod ip;
-mod runtime;
+mod plugin;
 mod server;
+mod socket;
 
 pub(crate) fn allow_mtud() -> bool {
-    quinn_udp::may_fragment()
-}
-
-type Runtime = BevyTasksRuntime;
-
-fn runtime() -> Runtime {
-    BevyTasksRuntime
+    !quinn_udp::may_fragment()
 }
 
 #[derive(Debug, Error)]
