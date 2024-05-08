@@ -1,4 +1,7 @@
-use quinn_proto::{ConnectionError, ReadError, SendDatagramError, WriteError};
+use bevy_ecs::{entity::Entity, event::Event, query::QueryEntityError};
+use quinn_proto::{
+    AcceptError, ConnectError, ConnectionError, ReadError, SendDatagramError, WriteError,
+};
 use rcgen::RcgenError;
 use thiserror::Error;
 
@@ -10,11 +13,17 @@ pub mod crypto;
 mod endpoint;
 pub mod ip;
 mod plugin;
-mod server;
+// mod server;
 mod socket;
 
-pub(crate) fn allow_mtud() -> bool {
-    !quinn_udp::may_fragment()
+// pub(crate) fn allow_mtud() -> bool {
+//     !quinn_udp::may_fragment()
+// }
+
+#[derive(Debug, Event)]
+pub struct EntityError {
+    pub entity: Entity,
+    pub error: Error,
 }
 
 #[derive(Debug, Error)]
@@ -35,6 +44,10 @@ pub(crate) enum ErrorKind {
     #[error("The stream was finished unexpectedly")]
     StreamFinished,
     #[error(transparent)]
+    QueryEntity(#[from] QueryEntityError),
+    #[error(transparent)]
+    Connect(#[from] ConnectError),
+    #[error(transparent)]
     Connection(#[from] ConnectionError),
     #[error(transparent)]
     Unreliable(#[from] SendDatagramError),
@@ -43,7 +56,7 @@ pub(crate) enum ErrorKind {
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
-    Rcgen(#[from] RcgenError),
+    Rcgen(#[from] rcgen::Error),
     #[error(transparent)]
     Rustls(#[from] rustls::Error),
     #[error(transparent)]

@@ -1,80 +1,72 @@
-use std::time::SystemTime;
-
 use rustls::{
-    client::{ServerCertVerified, ServerCertVerifier},
-    Certificate, ConfigBuilder, ConfigSide, ServerName, WantsCipherSuites, WantsVerifier,
+    client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
+    crypto::WebPkiSupportedAlgorithms,
+    pki_types::{CertificateDer, ServerName, UnixTime},
+    DigitallySignedStruct, SignatureScheme,
 };
 
 /// A dummy [`ServerCertVerifier`] that treats any certificate as valid.
 /// This should not be used in production, as it is vulnerable to man-in-the-middle attacks.
 #[derive(Debug)]
-pub struct NoServerVerification;
+pub struct NoServerVerification(WebPkiSupportedAlgorithms);
+
+impl NoServerVerification {
+    fn new(algorithms: WebPkiSupportedAlgorithms) -> Self {
+        Self(algorithms)
+    }
+}
 
 impl ServerCertVerifier for NoServerVerification {
     fn verify_server_cert(
         &self,
-        _: &Certificate,
-        _: &[Certificate],
-        _: &ServerName,
-        _: &mut dyn Iterator<Item = &[u8]>,
-        _: &[u8],
-        _: SystemTime,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
         Ok(ServerCertVerified::assertion())
     }
-}
 
-trait ConfigBuilderExt<S: ConfigSide> {
-    fn with_quic_defaults(self) -> ConfigBuilder<S, WantsVerifier>;
-}
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.0)
+    }
 
-impl<S: ConfigSide> ConfigBuilderExt<S> for ConfigBuilder<S, WantsCipherSuites> {
-    /// Exactly the same as [`with_safe_defaults`] except with only TLS 1.3 enabled,
-    /// rather than both TLS 1.3 & 1.2, as QUIC requires TLS 1.3
-    ///
-    /// [`with_safe_defaults`]: https://docs.rs/rustls/0.21.9/rustls/struct.ConfigBuilder.html#method.with_safe_defaults
-    fn with_quic_defaults(self) -> ConfigBuilder<S, WantsVerifier> {
-        // https://github.com/quinn-rs/quinn/blob/b5d23a864759d2d5ba819d70e30f9c87ef6784db/quinn-proto/src/crypto/rustls.rs#L383-L417
-        self.with_safe_default_cipher_suites()
-            .with_safe_default_kx_groups()
-            .with_protocol_versions(&[&rustls::version::TLS13])
-            .unwrap()
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.0)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.0.supported_schemes()
     }
 }
 
 pub mod client {
     use std::sync::Arc;
 
-    use rustls::{client::ServerCertVerifier, ClientConfig, RootCertStore};
-    use tracing::warn;
+    use rustls::{client::danger::ServerCertVerifier, ClientConfig, RootCertStore};
 
-    use super::ConfigBuilderExt;
-
-    /// Create a [`ClientConfig`] that trusts the platform's native root certificates, using [rustls-native-certs]
+    /// Create a [`ClientConfig`] that trusts the platform's native certificate verifier, using [rustls-platform-verifier]
     ///
-    /// [rustls-native-certs]: https://crates.io/crates/rustls-native-certs
-    #[cfg(feature = "rustls-native-certs")]
-    pub fn config_with_native_certs() -> ClientConfig {
-        let mut root_store = RootCertStore::empty();
-        match rustls_native_certs::load_native_certs() {
-            Ok(certs) => {
-                root_store.add_parsable_certificates(&certs);
-                if root_store.is_empty() {
-                    warn!("Could not load any platform native root certs. Enable debug-level logging for more information");
-                }
-            }
-            Err(e) => {
-                warn!("Could not load platform native root certs: {e}");
-            }
-        };
-
-        config_with_root_certs(root_store)
+    /// [rustls-platform-verifier]: https://crates.io/crates/rustls-platform-verifier
+    #[cfg(feature = "rustls-platform-verifier")]
+    pub fn config_with_platform_verifier() -> ClientConfig {
+        rustls_platform_verifier::tls_config()
     }
 
     /// Create a [`ClientConfig`] that trusts the given root certificates
     pub fn config_with_root_certs(root_store: RootCertStore) -> ClientConfig {
-        ClientConfig::builder()
-            .with_quic_defaults()
+        ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .with_root_certificates(root_store)
             .with_no_client_auth()
     }
@@ -83,8 +75,8 @@ pub mod client {
     pub fn config_with_cert_verifier(
         cert_verifier: impl ServerCertVerifier + 'static,
     ) -> ClientConfig {
-        ClientConfig::builder()
-            .with_quic_defaults()
+        ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+            .dangerous()
             .with_custom_certificate_verifier(Arc::new(cert_verifier))
             .with_no_client_auth()
     }
@@ -93,11 +85,13 @@ pub mod client {
 pub mod server {
     use std::sync::Arc;
 
-    use rustls::{server::ResolvesServerCert, Certificate, PrivateKey, ServerConfig};
+    use rustls::{
+        pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
+        server::ResolvesServerCert,
+        ServerConfig,
+    };
 
     use crate::Error;
-
-    use super::ConfigBuilderExt;
 
     /// Create a [`ServerConfig`] by generating a self-signed certificate using the specified server name(s)
     ///
@@ -110,27 +104,27 @@ pub mod server {
     ) -> Result<ServerConfig, Error> {
         let certificate = rcgen::generate_simple_self_signed(subject_alt_names)?;
         config_with_single_cert(
-            vec![Certificate(certificate.serialize_der()?)],
-            PrivateKey(certificate.serialize_private_key_der()),
+            vec![CertificateDer::from(certificate.cert)],
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
+                certificate.key_pair.serialize_der(),
+            )),
         )
         .map_err(Into::into)
     }
 
     /// Create a [`ServerConfig`] with the specified certificate and private key
     pub fn config_with_single_cert(
-        cert_chain: Vec<Certificate>,
-        key_der: PrivateKey,
+        cert_chain: Vec<CertificateDer<'static>>,
+        key_der: PrivateKeyDer<'static>,
     ) -> Result<ServerConfig, rustls::Error> {
-        ServerConfig::builder()
-            .with_quic_defaults()
+        ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .with_no_client_auth()
             .with_single_cert(cert_chain, key_der)
     }
 
     /// Create a [`ServerConfig`] with a custom certificate resolver
     pub fn config_with_cert_resolver(resolver: impl ResolvesServerCert + 'static) -> ServerConfig {
-        ServerConfig::builder()
-            .with_quic_defaults()
+        ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .with_no_client_auth()
             .with_cert_resolver(Arc::new(resolver))
     }

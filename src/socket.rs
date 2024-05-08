@@ -1,38 +1,48 @@
-use std::{io::IoSliceMut, mem::MaybeUninit};
+use std::{
+    io::{IoSliceMut, Result},
+    mem::MaybeUninit,
+};
 
 use bytes::BytesMut;
-use quinn_udp::{RecvMeta, UdpSocketState, UdpState};
+use quinn_udp::{RecvMeta, UdpSockRef, UdpSocketState};
 
 #[derive(Debug)]
 pub(crate) struct UdpSocket {
     socket: std::net::UdpSocket,
     state: UdpSocketState,
-    capabilities: UdpState,
     receive_buffer: Box<[u8]>,
 }
 
 impl UdpSocket {
     pub(crate) fn new(socket: std::net::UdpSocket, max_udp_payload_size: u64) -> Result<Self> {
-        let state = UdpSocketState::new();
-        let capabilities = UdpState::new();
-        state.configure(socket.into()).map(|_| Self {
+        let state = UdpSocketState::new((&socket).into())?;
+        let receive_buffer = vec![
+            0;
+            max_udp_payload_size.min(64 * 1024) as usize
+                * state.gro_segments()
+                * quinn_udp::BATCH_SIZE
+        ]
+        .into_boxed_slice();
+        Ok(Self {
             socket,
             state,
-            capabilities,
-            receive_buffer: vec![
-                0;
-                max_udp_payload_size.min(64 * 1024) as usize
-                    * capabilities.gro_segments()
-                    * quinn_udp::BATCH_SIZE
-            ],
+            receive_buffer,
         })
     }
 
     pub(crate) fn max_gso_segments(&self) -> usize {
-        self.capabilities.max_gso_segments()
+        self.state.max_gso_segments()
     }
 
-    pub(crate) fn receive(&mut self, handle: impl FnMut(RecvMeta, BytesMut)) -> Result<()> {
+    pub(crate) fn gro_segments(&self) -> usize {
+        self.state.gro_segments()
+    }
+
+    pub(crate) fn may_fragment(&self) -> bool {
+        self.state.may_fragment()
+    }
+
+    pub(crate) fn receive(&mut self, mut handle: impl FnMut(RecvMeta, BytesMut)) -> Result<()> {
         let mut metas = [RecvMeta::default(); quinn_udp::BATCH_SIZE];
         let mut iovs = MaybeUninit::<[IoSliceMut<'_>; quinn_udp::BATCH_SIZE]>::uninit();
 
@@ -54,9 +64,12 @@ impl UdpSocket {
         let mut iovs = unsafe { iovs.assume_init() };
 
         loop {
-            match self.state.recv(self.socket, &mut iovs, &mut metas) {
+            match self
+                .state
+                .recv((&self.socket).into(), &mut iovs, &mut metas)
+            {
                 Ok(msgs) => {
-                    for (meta, buf) in metas.iter().zip(iovs.iter()).take(msgs) {
+                    for (&meta, buf) in metas.iter().zip(iovs.iter()).take(msgs) {
                         let mut data: BytesMut = buf[0..meta.len].into();
                         while !data.is_empty() {
                             let buf = data.split_to(meta.stride.min(data.len()));
