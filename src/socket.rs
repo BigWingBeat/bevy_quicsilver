@@ -1,10 +1,10 @@
 use std::{
     io::{IoSliceMut, Result},
-    mem::MaybeUninit,
+    net::SocketAddr,
 };
 
 use bytes::BytesMut;
-use quinn_udp::{RecvMeta, UdpSockRef, UdpSocketState};
+use quinn_udp::{RecvMeta, UdpSocketState};
 
 #[derive(Debug)]
 pub(crate) struct UdpSocket {
@@ -15,6 +15,7 @@ pub(crate) struct UdpSocket {
 
 impl UdpSocket {
     pub(crate) fn new(socket: std::net::UdpSocket, max_udp_payload_size: u64) -> Result<Self> {
+        // Based on https://github.com/quinn-rs/quinn/blob/main/quinn/src/endpoint.rs#L691
         let state = UdpSocketState::new((&socket).into())?;
         let receive_buffer = vec![
             0;
@@ -42,26 +43,22 @@ impl UdpSocket {
         self.state.may_fragment()
     }
 
+    pub(crate) fn local_addr(&self) -> Result<SocketAddr> {
+        self.socket.local_addr()
+    }
+
     pub(crate) fn receive(&mut self, mut handle: impl FnMut(RecvMeta, BytesMut)) -> Result<()> {
+        // Based on https://github.com/quinn-rs/quinn/blob/0.11.1/quinn/src/endpoint.rs#L714
         let mut metas = [RecvMeta::default(); quinn_udp::BATCH_SIZE];
-        let mut iovs = MaybeUninit::<[IoSliceMut<'_>; quinn_udp::BATCH_SIZE]>::uninit();
+        let mut iovs: [IoSliceMut; quinn_udp::BATCH_SIZE] = {
+            let mut bufs = self
+                .receive_buffer
+                .chunks_mut(self.receive_buffer.len() / quinn_udp::BATCH_SIZE)
+                .map(IoSliceMut::new);
 
-        for (i, buf) in self
-            .receive_buffer
-            .chunks_mut(self.receive_buffer.len() / quinn_udp::BATCH_SIZE)
-            .enumerate()
-        {
-            // SAFETY: The `chunk_size` calculation for `chunks_mut` above ensures that `i` doesn't exceed the bounds of the array
-            unsafe {
-                iovs.as_mut_ptr()
-                    .cast::<IoSliceMut>()
-                    .add(i)
-                    .write(IoSliceMut::<'_>::new(buf));
-            }
-        }
-
-        // SAFETY: The above loop ensures that the entire array is initialised
-        let mut iovs = unsafe { iovs.assume_init() };
+            // This won't panic as `from_fn` calls the closure `BATCH_SIZE` times, which is exactly the length of the `bufs` iterator
+            std::array::from_fn(|_| bufs.next().unwrap())
+        };
 
         loop {
             match self
@@ -78,6 +75,7 @@ impl UdpSocket {
                     }
                 }
                 Err(e) => match e.kind() {
+                    // WouldBlock means there isn't any more data to read from the socket
                     std::io::ErrorKind::WouldBlock => return Ok(()),
                     // Ignore ECONNRESET as it's undefined in QUIC and may be injected by an attacker
                     std::io::ErrorKind::ConnectionReset => continue,
