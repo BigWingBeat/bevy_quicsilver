@@ -1,8 +1,5 @@
 use bevy_ecs::{entity::Entity, event::Event, query::QueryEntityError};
-use quinn_proto::{
-    AcceptError, ConnectError, ConnectionError, ReadError, SendDatagramError, WriteError,
-};
-use rcgen::RcgenError;
+use quinn_proto::{ConnectError, ConnectionError, ReadError, SendDatagramError, WriteError};
 use thiserror::Error;
 
 pub use quinn_proto::{ClientConfig, ServerConfig};
@@ -10,15 +7,11 @@ pub use quinn_proto::{ClientConfig, ServerConfig};
 mod client;
 pub mod connection;
 pub mod crypto;
-mod endpoint;
+pub mod endpoint;
 pub mod ip;
 mod plugin;
 // mod server;
 mod socket;
-
-// pub(crate) fn allow_mtud() -> bool {
-//     !quinn_udp::may_fragment()
-// }
 
 #[derive(Debug, Event)]
 pub struct EntityError {
@@ -43,6 +36,10 @@ where
 pub(crate) enum ErrorKind {
     #[error("The stream was finished unexpectedly")]
     StreamFinished,
+    #[error("The specified entity does not have an Endpoint component")]
+    NoSuchEndpoint(Entity, #[source] QueryEntityError),
+    #[error("The specified entity already has a Connection component")]
+    ConnectionAlreadyExists(Entity),
     #[error(transparent)]
     QueryEntity(#[from] QueryEntityError),
     #[error(transparent)]

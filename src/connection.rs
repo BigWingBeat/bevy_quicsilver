@@ -1,21 +1,18 @@
 use bevy_ecs::{
     component::Component,
     entity::{Entity, EntityHash},
-    event::{EventReader, EventWriter},
+    event::EventWriter,
     system::{Query, Res},
 };
 use bevy_time::{Real, Time, Timer, TimerMode};
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use hashbrown::HashMap;
-use quinn_proto::{
-    crypto::Session, ConnectionHandle, ConnectionStats, Dir, Event, StreamEvent, StreamId,
-};
+use quinn_proto::{ConnectionHandle, ConnectionStats, Dir, Event, StreamEvent, StreamId};
 
 use crate::endpoint::Endpoint;
 
 use std::{
     iter,
-    sync::Mutex,
     time::{Duration, Instant},
 };
 
@@ -30,8 +27,7 @@ pub(crate) struct EndpointEvent {
 pub struct Connection {
     endpoint: Entity,
     handle: ConnectionHandle,
-    // TODO: Remove mutex when sync fix is released
-    connection: Mutex<quinn_proto::Connection>,
+    connection: quinn_proto::Connection,
     timeout_timer: Option<(Timer, Instant)>,
     should_poll: bool,
     transmit_buf: Vec<u8>,
@@ -48,7 +44,7 @@ impl Connection {
         Self {
             endpoint,
             handle,
-            connection: Mutex::new(connection),
+            connection,
             timeout_timer: None,
             should_poll: false,
             transmit_buf: Vec::new(),
@@ -59,14 +55,14 @@ impl Connection {
 
     /// Returns connection statistics
     pub fn stats(&self) -> ConnectionStats {
-        self.connection.lock().unwrap().stats()
+        self.connection.stats()
     }
 
     /// Ping the remote endpoint
     ///
     /// Causes an ACK-eliciting packet to be transmitted.
     pub fn ping(&mut self) {
-        self.connection.get_mut().unwrap().ping()
+        self.connection.ping()
     }
 
     // /// Get a session reference
@@ -122,8 +118,7 @@ impl Connection {
     // }
 
     fn flush_pending_writes(&mut self) {
-        let mut connection = self.connection.get_mut().unwrap();
-        let mut streams = connection.streams();
+        let mut streams = self.connection.streams();
 
         for (stream_id, bytes) in iter::zip(
             iter::from_fn(|| streams.open(Dir::Uni)),
@@ -136,36 +131,36 @@ impl Connection {
         }
 
         for (&stream_id, mut bytes) in self.pending_writes.iter_mut() {
-            let mut stream = connection.send_stream(stream_id);
+            let mut stream = self.connection.send_stream(stream_id);
             stream.write_chunks(&mut bytes);
         }
     }
 
     pub(crate) fn handle_event(&mut self, event: quinn_proto::ConnectionEvent) {
-        self.connection.get_mut().unwrap().handle_event(event);
+        self.connection.handle_event(event);
         self.should_poll = true;
     }
 
     fn handle_timeout(&mut self, now: Instant, delta: Duration) {
         if let Some((ref mut timer, _)) = self.timeout_timer {
             if timer.tick(delta).just_finished() {
-                self.connection.get_mut().unwrap().handle_timeout(now);
+                self.connection.handle_timeout(now);
                 self.should_poll = true;
             }
         }
     }
 
     fn poll_transmit(&mut self, now: Instant, max_datagrams: usize) {
-        let mut connection = self.connection.get_mut().unwrap();
         while let Some(transmit) =
-            connection.poll_transmit(now, max_datagrams, &mut self.transmit_buf)
+            self.connection
+                .poll_transmit(now, max_datagrams, &mut self.transmit_buf)
         {
             todo!()
         }
     }
 
     fn poll_timeout(&mut self, now: Instant) {
-        match self.connection.get_mut().unwrap().poll_timeout() {
+        match self.connection.poll_timeout() {
             Some(timeout) => {
                 if self
                     .timeout_timer
@@ -187,8 +182,7 @@ impl Connection {
     }
 
     fn poll_endpoint_events(&mut self, mut event_fn: impl FnMut(EndpointEvent)) {
-        let mut connection = self.connection.get_mut().unwrap();
-        while let Some(event) = connection.poll_endpoint_events() {
+        while let Some(event) = self.connection.poll_endpoint_events() {
             event_fn(EndpointEvent {
                 endpoint: self.endpoint,
                 connection: self.handle,
@@ -198,8 +192,7 @@ impl Connection {
     }
 
     fn poll(&mut self) {
-        let mut connection = self.connection.get_mut().unwrap();
-        while let Some(poll) = connection.poll() {
+        while let Some(poll) = self.connection.poll() {
             match poll {
                 Event::HandshakeDataReady => {}
                 Event::Connected => todo!(),
