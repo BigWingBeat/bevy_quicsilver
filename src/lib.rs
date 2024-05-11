@@ -36,10 +36,6 @@ where
 pub(crate) enum ErrorKind {
     #[error("The stream was finished unexpectedly")]
     StreamFinished,
-    #[error("The specified entity does not have an Endpoint component")]
-    NoSuchEndpoint(Entity, #[source] QueryEntityError),
-    #[error("The specified entity already has a Connection component")]
-    ConnectionAlreadyExists(Entity),
     #[error(transparent)]
     QueryEntity(#[from] QueryEntityError),
     #[error(transparent)]

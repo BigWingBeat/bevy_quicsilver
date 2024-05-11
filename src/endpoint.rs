@@ -1,96 +1,26 @@
 use std::{net::SocketAddr, sync::Arc, time::Instant};
 
 use bevy_ecs::{
+    bundle::Bundle,
     component::Component,
     entity::{Entity, EntityHash},
-    event::{Event, EventReader, EventWriter},
-    query::{Has, QueryEntityError},
+    event::EventWriter,
+    query::{Added, QueryData},
     system::{Commands, Query},
 };
 use hashbrown::HashMap;
 use quinn_proto::{
-    ClientConfig, ConnectError, ConnectionHandle, DatagramEvent, EndpointConfig, ServerConfig,
+    ClientConfig, ConnectError, ConnectionEvent, ConnectionHandle, DatagramEvent, EndpointConfig,
+    EndpointEvent, ServerConfig,
 };
 
-use crate::{
-    connection::{Connection, EndpointEvent},
-    socket::UdpSocket,
-    EntityError, Error, ErrorKind,
-};
+use crate::{connection::Connection, socket::UdpSocket, EntityError, Error};
 
-/// An event that initiates a connection to a remote endpoint
-#[derive(Debug, Event)]
-pub struct ConnectEvent {
-    endpoint_entity: Entity,
-    server_address: SocketAddr,
-    server_name: String,
-    connection_entity: Option<Entity>,
-    client_config: Option<ClientConfig>,
-}
+/// A bundle for adding an [`Endpoint`] to an entity
+#[derive(Debug, Bundle)]
+pub struct EndpointBundle(EndpointImpl);
 
-impl ConnectEvent {
-    /// Create a new event to initiate a connection with the specified endpoint,
-    /// to the peer identified by the specified address and server name.
-    /// If the connection succeeds, a new entity will be spawned with a [`Connection`] component.
-    ///
-    /// The exact value of the `server_name` parameter must be included in the `subject_alt_names` field of the server's certificate,
-    /// as described by [`config_with_gen_self_signed`].
-    ///
-    /// [config_with_gen_self_signed]: crate::crypto::server::config_with_gen_self_signed
-    pub fn new(endpoint_entity: Entity, server_address: SocketAddr, server_name: String) -> Self {
-        Self {
-            endpoint_entity,
-            server_address,
-            server_name,
-            connection_entity: None,
-            client_config: None,
-        }
-    }
-
-    /// Create a new event to initiate a connection with the specified endpoint,
-    /// to the peer identified by the specified address and server name.
-    /// If the connection succeeds, a [`Connection`] component will be added to the given `connection_entity`.
-    ///
-    /// The exact value of the `server_name` parameter must be included in the `subject_alt_names` field of the server's certificate,
-    /// as described by [`config_with_gen_self_signed`].
-    ///
-    /// [config_with_gen_self_signed]: crate::crypto::server::config_with_gen_self_signed
-    pub fn new_with_entity(
-        endpoint_entity: Entity,
-        server_address: SocketAddr,
-        server_name: String,
-        connection_entity: Entity,
-    ) -> Self {
-        Self {
-            endpoint_entity,
-            server_address,
-            server_name,
-            connection_entity: Some(connection_entity),
-            client_config: None,
-        }
-    }
-
-    /// Overrides the endpoint's default client config just for this connection
-    pub fn with_client_config(self, config: ClientConfig) -> Self {
-        Self {
-            client_config: Some(config),
-            ..self
-        }
-    }
-}
-
-/// The main entrypoint to the library. Wraps a [`quinn_proto::Endpoint`].
-///
-/// Unlike `quinn_proto`, this library *does* do actual I/O.
-#[derive(Debug, Component)]
-pub struct Endpoint {
-    endpoint: quinn_proto::Endpoint,
-    client_config: Option<ClientConfig>,
-    connections: HashMap<ConnectionHandle, Entity, EntityHash>,
-    socket: UdpSocket,
-}
-
-impl Endpoint {
+impl EndpointBundle {
     /// Helper to construct an endpoint for use with outgoing connections, using the default [`EndpointConfig`]
     ///
     /// Note that `local_addr` is the *local* address to bind to, which should usually be a wildcard
@@ -105,17 +35,7 @@ impl Endpoint {
         local_addr: SocketAddr,
         default_client_config: Option<ClientConfig>,
     ) -> Result<Self, Error> {
-        std::net::UdpSocket::bind(local_addr)
-            .map_err(Into::into)
-            .and_then(|socket| {
-                Self::new(
-                    socket,
-                    EndpointConfig::default(),
-                    default_client_config,
-                    None,
-                    None,
-                )
-            })
+        EndpointImpl::new_client(local_addr, default_client_config).map(Self)
     }
 
     /// Helper to construct an endpoint for use with incoming connections, using the default [`EndpointConfig`]
@@ -129,17 +49,7 @@ impl Endpoint {
     /// addresses. Portable applications should bind an address that matches the family they wish to
     /// communicate within.
     pub fn new_server(local_addr: SocketAddr, server_config: ServerConfig) -> Result<Self, Error> {
-        std::net::UdpSocket::bind(local_addr)
-            .map_err(Into::into)
-            .and_then(|socket| {
-                Self::new(
-                    socket,
-                    EndpointConfig::default(),
-                    None,
-                    Some(server_config),
-                    None,
-                )
-            })
+        EndpointImpl::new_server(local_addr, server_config).map(Self)
     }
 
     /// Helper to construct an endpoint for use with both incoming and outgoing connections, using the default [`EndpointConfig`]
@@ -157,6 +67,187 @@ impl Endpoint {
         default_client_config: ClientConfig,
         server_config: ServerConfig,
     ) -> Result<Self, Error> {
+        EndpointImpl::new_client_host(local_addr, default_client_config, server_config).map(Self)
+    }
+
+    /// Construct an endpoint with the specified socket and configurations
+    pub fn new(
+        socket: std::net::UdpSocket,
+        config: EndpointConfig,
+        default_client_config: Option<ClientConfig>,
+        server_config: Option<ServerConfig>,
+        rng_seed: Option<[u8; 32]>,
+    ) -> Result<Self, Error> {
+        EndpointImpl::new(
+            socket,
+            config,
+            default_client_config,
+            server_config,
+            rng_seed,
+        )
+        .map(Self)
+    }
+}
+
+/// A QUIC endpoint.
+///
+/// An endpoint corresponds to a single UDP socket, may host many connections,
+/// and may act as both client and server for different connections.
+///
+/// # Usage
+/// ```
+/// fn my_system(query: Query<Endpoint>) {
+///     for endpoint in query.iter() {
+///         println!("{}", endpoint.open_connections());
+///     }
+/// }
+/// ```
+#[derive(QueryData)]
+#[query_data(mutable)]
+pub struct Endpoint {
+    entity: Entity,
+    endpoint: &'static mut EndpointImpl,
+}
+
+impl EndpointItem<'_> {
+    /// Set the default client configuration used by [`Self::connect()`]
+    pub fn set_default_client_config(&mut self, config: ClientConfig) {
+        self.endpoint.set_default_client_config(config)
+    }
+
+    /// Replace the server configuration, affecting new incoming connections only
+    pub fn set_server_config(&mut self, server_config: Option<ServerConfig>) {
+        self.endpoint.set_server_config(server_config)
+    }
+
+    pub(crate) fn handle_event(
+        &mut self,
+        connection: ConnectionHandle,
+        event: EndpointEvent,
+    ) -> Option<ConnectionEvent> {
+        self.endpoint.handle_event(connection, event)
+    }
+
+    /// Initiate a connection with the remote endpoint identified by the specified address and server name,
+    /// using the default client config. The returned [`Connection`] component should be inserted onto an entity.
+    ///
+    /// The exact value of the `server_name` parameter must be included in the `subject_alt_names` field of the server's certificate,
+    /// as described by [`config_with_gen_self_signed`].
+    ///
+    /// [config_with_gen_self_signed]: crate::crypto::server::config_with_gen_self_signed
+    pub fn connect(
+        &mut self,
+        server_address: SocketAddr,
+        server_name: &str,
+    ) -> Result<Connection, Error> {
+        self.endpoint
+            .connect(self.entity, server_address, server_name)
+    }
+
+    /// Initiate a connection with the remote endpoint identified by the specified address and server name,
+    /// using the specified client config. The returned [`Connection`] component should be inserted onto an entity.
+    ///
+    /// The exact value of the `server_name` parameter must be included in the `subject_alt_names` field of the server's certificate,
+    /// as described by [`config_with_gen_self_signed`].
+    ///
+    /// [config_with_gen_self_signed]: crate::crypto::server::config_with_gen_self_signed
+    pub fn connect_with(
+        &mut self,
+        server_address: SocketAddr,
+        server_name: &str,
+        client_config: ClientConfig,
+    ) -> Result<Connection, Error> {
+        self.endpoint
+            .connect_with(self.entity, server_address, server_name, client_config)
+    }
+
+    /// Switch to a new UDP socket
+    ///
+    /// Allows the endpoint’s address to be updated live, affecting all active connections.
+    /// Incoming connections and connections to servers unreachable from the new address will be lost.
+    ///
+    /// On error, the old UDP socket is retained.
+    pub fn rebind(&mut self, new_socket: std::net::UdpSocket) -> std::io::Result<()> {
+        self.endpoint.rebind(new_socket)
+    }
+
+    /// Get the local `SocketAddr` the underlying socket is bound to
+    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
+        self.endpoint.local_addr()
+    }
+
+    /// Get the number of connections that are currently open
+    pub fn open_connections(&self) -> usize {
+        self.endpoint.open_connections()
+    }
+
+    pub(crate) fn max_gso_segments(&self) -> usize {
+        self.endpoint.max_gso_segments()
+    }
+}
+
+impl EndpointReadOnlyItem<'_> {
+    /// Get the local `SocketAddr` the underlying socket is bound to
+    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
+        self.endpoint.local_addr()
+    }
+
+    /// Get the number of connections that are currently open
+    pub fn open_connections(&self) -> usize {
+        self.endpoint.open_connections()
+    }
+
+    pub(crate) fn max_gso_segments(&self) -> usize {
+        self.endpoint.max_gso_segments()
+    }
+}
+
+/// Actual underlying component type behind the [`EndpointBundle`] bundle and [`Endpoint`] querydata types
+#[derive(Debug, Component)]
+struct EndpointImpl {
+    endpoint: quinn_proto::Endpoint,
+    default_client_config: Option<ClientConfig>,
+    connections: HashMap<ConnectionHandle, Entity, EntityHash>,
+    socket: UdpSocket,
+}
+
+impl EndpointImpl {
+    fn new_client(
+        local_addr: SocketAddr,
+        default_client_config: Option<ClientConfig>,
+    ) -> Result<Self, Error> {
+        std::net::UdpSocket::bind(local_addr)
+            .map_err(Into::into)
+            .and_then(|socket| {
+                Self::new(
+                    socket,
+                    EndpointConfig::default(),
+                    default_client_config,
+                    None,
+                    None,
+                )
+            })
+    }
+
+    fn new_server(local_addr: SocketAddr, server_config: ServerConfig) -> Result<Self, Error> {
+        std::net::UdpSocket::bind(local_addr)
+            .map_err(Into::into)
+            .and_then(|socket| {
+                Self::new(
+                    socket,
+                    EndpointConfig::default(),
+                    None,
+                    Some(server_config),
+                    None,
+                )
+            })
+    }
+
+    fn new_client_host(
+        local_addr: SocketAddr,
+        default_client_config: ClientConfig,
+        server_config: ServerConfig,
+    ) -> Result<Self, Error> {
         std::net::UdpSocket::bind(local_addr)
             .map_err(Into::into)
             .and_then(|socket| {
@@ -170,8 +261,7 @@ impl Endpoint {
             })
     }
 
-    /// Construct an endpoint with the specified socket and configurations
-    pub fn new(
+    fn new(
         socket: std::net::UdpSocket,
         config: EndpointConfig,
         default_client_config: Option<ClientConfig>,
@@ -186,40 +276,67 @@ impl Endpoint {
                     !socket.may_fragment(),
                     rng_seed,
                 ),
-                client_config: default_client_config,
+                default_client_config,
                 connections: HashMap::default(),
                 socket,
             })
             .map_err(Into::into)
     }
 
-    /// Set the default client configuration used by [`Self::connect()`]
-    pub fn set_default_client_config(&mut self, config: ClientConfig) {
-        self.client_config = Some(config);
+    pub(crate) fn handle_event(
+        &mut self,
+        connection: ConnectionHandle,
+        event: EndpointEvent,
+    ) -> Option<ConnectionEvent> {
+        self.endpoint.handle_event(connection, event)
     }
 
-    /// Replace the server configuration, affecting new incoming connections only
-    pub fn set_server_config(&mut self, server_config: Option<ServerConfig>) {
+    fn connect(
+        &mut self,
+        self_entity: Entity,
+        server_address: SocketAddr,
+        server_name: &str,
+    ) -> Result<Connection, Error> {
+        self.default_client_config
+            .clone()
+            .ok_or(ConnectError::NoDefaultClientConfig.into())
+            .and_then(|client_config| {
+                self.connect_with(self_entity, server_address, server_name, client_config)
+            })
+    }
+
+    fn connect_with(
+        &mut self,
+        self_entity: Entity,
+        server_address: SocketAddr,
+        server_name: &str,
+        client_config: ClientConfig,
+    ) -> Result<Connection, Error> {
+        let now = Instant::now();
+        // TODO: Why https://github.com/quinn-rs/quinn/blob/0.10.2/quinn/src/endpoint.rs#L185-L192
+        self.endpoint
+            .connect(now, client_config, server_address, server_name)
+            .map_err(Into::into)
+            .map(|(handle, connection)| Connection::new(self_entity, handle, connection))
+    }
+
+    fn set_default_client_config(&mut self, config: ClientConfig) {
+        self.default_client_config = Some(config);
+    }
+
+    fn set_server_config(&mut self, server_config: Option<ServerConfig>) {
         self.endpoint.set_server_config(server_config.map(Arc::new))
     }
 
-    /// Switch to a new UDP socket
-    ///
-    /// Allows the endpoint’s address to be updated live, affecting all active connections.
-    /// Incoming connections and connections to servers unreachable from the new address will be lost.
-    ///
-    /// On error, the old UDP socket is retained.
-    pub fn rebind(&mut self, new_socket: std::net::UdpSocket) -> std::io::Result<()> {
+    fn rebind(&mut self, new_socket: std::net::UdpSocket) -> std::io::Result<()> {
         todo!()
     }
 
-    /// Get the local `SocketAddr` the underlying socket is bound to
-    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
+    fn local_addr(&self) -> std::io::Result<SocketAddr> {
         self.socket.local_addr()
     }
 
-    /// Get the number of connections that are currently open
-    pub fn open_connections(&self) -> usize {
+    fn open_connections(&self) -> usize {
         self.connections.len()
     }
 
@@ -228,98 +345,40 @@ impl Endpoint {
     }
 }
 
-fn poll_connect_events(
-    mut commands: Commands,
-    mut events: EventReader<ConnectEvent>,
-    mut endpoints: Query<&mut Endpoint>,
-    has_connection: Query<Has<Connection>>,
-    mut error_events: EventWriter<EntityError>,
+pub(crate) fn find_new_connections(
+    new_connections: Query<(Entity, &Connection), Added<Connection>>,
+    mut endpoints: Query<Endpoint>,
 ) {
-    let now = Instant::now();
-    for event in events.read() {
-        if let Err(e) = endpoints
-            .get_mut(event.endpoint_entity)
-            .map_err(|e| {
-                if let QueryEntityError::QueryDoesNotMatch(entity) = e {
-                    ErrorKind::NoSuchEndpoint(entity, e).into()
-                } else {
-                    e.into()
-                }
-            })
-            .and_then(|mut endpoint| {
-                let connection_entity = event
-                    .connection_entity
-                    .map(|entity| {
-                        has_connection
-                            .get(entity)
-                            .map_err(ErrorKind::QueryEntity)
-                            .and_then(|has_connection| {
-                                (!has_connection)
-                                    .then_some(entity)
-                                    .ok_or(ErrorKind::ConnectionAlreadyExists(entity))
-                            })
-                    })
-                    .transpose()?;
+    for (entity, connection) in new_connections.iter() {
+        let mut endpoint = endpoints
+            .get_mut(connection.endpoint)
+            .expect("Endpoint entity has gone missing");
 
-                // TODO: Why https://github.com/quinn-rs/quinn/blob/0.10.2/quinn/src/endpoint.rs#L185-L192
-                event
-                    .client_config
-                    .as_ref()
-                    .or(endpoint.client_config.as_ref())
-                    .ok_or(ConnectError::NoDefaultClientConfig.into())
-                    .cloned()
-                    .and_then(|config| {
-                        endpoint
-                            .endpoint
-                            .connect(
-                                now,
-                                config.clone(),
-                                event.server_address,
-                                &event.server_name,
-                            )
-                            .map_err(Into::into)
-                    })
-                    .map(|(handle, connection)| {
-                        let connection = Connection::new(event.endpoint_entity, handle, connection);
-
-                        let connection_entity = if let Some(entity) = connection_entity {
-                            commands.entity(entity).insert(connection).id()
-                        } else {
-                            commands.spawn(connection).id()
-                        };
-
-                        endpoint
-                            .connections
-                            .try_insert(handle, connection_entity)
-                            .expect("Got duplicate connection handle");
-                    })
-            })
-        {
-            error_events.send(EntityError {
-                entity: event.endpoint_entity,
-                error: e,
-            });
-        }
+        endpoint
+            .endpoint
+            .connections
+            .insert(connection.handle, entity);
     }
 }
 
-fn poll_endpoints(
+pub(crate) fn poll_endpoints(
     mut commands: Commands,
-    mut endpoint_query: Query<(Entity, &mut Endpoint)>,
+    mut endpoint_query: Query<Endpoint>,
     mut connection_query: Query<&mut Connection>,
-    inbound_events: EventReader<EndpointEvent>,
     mut error_events: EventWriter<EntityError>,
 ) {
     let now = Instant::now();
-    for (entity, mut endpoint) in endpoint_query.iter_mut() {
-        let Endpoint {
+    for EndpointItem {
+        entity,
+        mut endpoint,
+    } in endpoint_query.iter_mut()
+    {
+        let EndpointImpl {
             endpoint,
-            client_config,
+            default_client_config: client_config,
             connections,
             socket,
         } = &mut *endpoint;
-
-        // #1: .handle()
 
         if let Err(e) = socket.receive(|meta, data| {
             match endpoint.handle(
@@ -370,9 +429,6 @@ fn poll_endpoints(
                 error: e.into(),
             });
         }
-
-        // #2: .handle_event()
-        // #3: .poll_transmit()
     }
 }
 

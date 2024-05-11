@@ -1,13 +1,14 @@
 use bevy_ecs::{
     component::Component,
     entity::{Entity, EntityHash},
-    event::EventWriter,
     system::{Query, Res},
 };
 use bevy_time::{Real, Time, Timer, TimerMode};
 use bytes::Bytes;
 use hashbrown::HashMap;
-use quinn_proto::{ConnectionHandle, ConnectionStats, Dir, Event, StreamEvent, StreamId};
+use quinn_proto::{
+    ConnectionHandle, ConnectionStats, Dir, EndpointEvent, Event, StreamEvent, StreamId,
+};
 
 use crate::endpoint::Endpoint;
 
@@ -16,17 +17,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Debug, bevy_ecs::event::Event)]
-pub(crate) struct EndpointEvent {
-    endpoint: Entity,
-    connection: ConnectionHandle,
-    event: quinn_proto::EndpointEvent,
-}
-
+/// A QUIC connection
 #[derive(Debug, Component)]
 pub struct Connection {
-    endpoint: Entity,
-    handle: ConnectionHandle,
+    pub(crate) endpoint: Entity,
+    pub(crate) handle: ConnectionHandle,
     connection: quinn_proto::Connection,
     timeout_timer: Option<(Timer, Instant)>,
     should_poll: bool,
@@ -181,14 +176,8 @@ impl Connection {
         }
     }
 
-    fn poll_endpoint_events(&mut self, mut event_fn: impl FnMut(EndpointEvent)) {
-        while let Some(event) = self.connection.poll_endpoint_events() {
-            event_fn(EndpointEvent {
-                endpoint: self.endpoint,
-                connection: self.handle,
-                event,
-            });
-        }
+    fn poll_endpoint_events(&mut self) -> impl Iterator<Item = EndpointEvent> + '_ {
+        std::iter::from_fn(|| self.connection.poll_endpoint_events())
     }
 
     fn poll(&mut self) {
@@ -210,29 +199,36 @@ impl Connection {
     }
 }
 
-fn connection_system(
+pub(crate) fn poll_connections(
     mut query: Query<&mut Connection>,
-    endpoint: Query<&Endpoint>,
+    mut endpoint: Query<Endpoint>,
     time: Res<Time<Real>>,
-    mut outgoing_events: EventWriter<EndpointEvent>,
 ) {
     let now = Instant::now();
     for mut connection in query.iter_mut() {
+        let mut endpoint = endpoint
+            .get_mut(connection.endpoint)
+            .expect("Endpoint entity was despawned");
+        let connection_handle = connection.handle;
+
         connection.handle_timeout(now, time.delta());
 
-        let max_gso_segments = endpoint
-            .get(connection.endpoint)
-            .expect("Endpoint entity was despawned")
-            .max_gso_segments();
+        let max_gso_segments = endpoint.max_gso_segments();
 
-        if connection.should_poll {
+        while connection.should_poll {
             connection.should_poll = false;
             connection.poll_transmit(now, max_gso_segments);
             connection.poll_timeout(now);
-            connection.poll_endpoint_events(|event| {
-                outgoing_events.send(event);
-            });
+            let events = connection
+                .poll_endpoint_events()
+                .filter_map(|event| endpoint.handle_event(connection_handle, event))
+                .collect::<Vec<_>>();
             connection.poll();
+
+            // Process events after finishing polling instead of immediately
+            for event in events {
+                connection.handle_event(event);
+            }
         }
     }
 }
