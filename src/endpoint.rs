@@ -10,11 +10,11 @@ use bevy_ecs::{
 };
 use hashbrown::HashMap;
 use quinn_proto::{
-    ClientConfig, ConnectError, ConnectionEvent, ConnectionHandle, DatagramEvent, EndpointConfig,
-    EndpointEvent, ServerConfig,
+    AcceptError, ClientConfig, ConnectError, ConnectionEvent, ConnectionHandle, DatagramEvent,
+    EndpointConfig, EndpointEvent, ServerConfig,
 };
 
-use crate::{connection::Connection, socket::UdpSocket, EntityError, Error};
+use crate::{connection::Connection, incoming::Incoming, socket::UdpSocket, EntityError, Error};
 
 /// A bundle for adding an [`Endpoint`] to an entity
 #[derive(Debug, Bundle)]
@@ -159,6 +159,26 @@ impl EndpointItem<'_> {
     ) -> Result<Connection, Error> {
         self.endpoint
             .connect_with(self.entity, server_address, server_name, client_config)
+    }
+
+    pub(crate) fn accept(
+        &mut self,
+        incoming: quinn_proto::Incoming,
+        server_config: Option<Arc<ServerConfig>>,
+    ) -> Result<(ConnectionHandle, quinn_proto::Connection), Error> {
+        self.endpoint.accept(incoming, server_config)
+    }
+
+    pub(crate) fn refuse(&mut self, incoming: quinn_proto::Incoming) {
+        self.endpoint.refuse(incoming)
+    }
+
+    pub(crate) fn retry(&mut self, incoming: quinn_proto::Incoming) -> Result<(), Error> {
+        self.endpoint.retry(incoming)
+    }
+
+    pub(crate) fn ignore(&mut self, incoming: quinn_proto::Incoming) {
+        self.endpoint.ignore(incoming)
     }
 
     /// Switch to a new UDP socket
@@ -320,6 +340,50 @@ impl EndpointImpl {
             .map(|(handle, connection)| Connection::new(self_entity, handle, connection))
     }
 
+    fn accept(
+        &mut self,
+        incoming: quinn_proto::Incoming,
+        server_config: Option<Arc<ServerConfig>>,
+    ) -> Result<(ConnectionHandle, quinn_proto::Connection), Error> {
+        let mut response_buffer = Vec::new();
+        self.endpoint
+            .accept(
+                incoming,
+                Instant::now(),
+                &mut response_buffer,
+                server_config,
+            )
+            .map_err(|AcceptError { cause, response }| {
+                if let Some(response) = response {
+                    self.send(&response, &response_buffer);
+                }
+                cause.into()
+            })
+    }
+
+    fn refuse(&mut self, incoming: quinn_proto::Incoming) {
+        let mut response_buffer = Vec::new();
+        let transmit = self.endpoint.refuse(incoming, &mut response_buffer);
+        self.send(&transmit, &response_buffer);
+    }
+
+    fn retry(&mut self, incoming: quinn_proto::Incoming) -> Result<(), Error> {
+        let mut response_buffer = Vec::new();
+        self.endpoint
+            .retry(incoming, &mut response_buffer)
+            .map(|transmit| self.send(&transmit, &response_buffer))
+            .map_err(Into::into)
+    }
+
+    fn ignore(&mut self, incoming: quinn_proto::Incoming) {
+        self.endpoint.ignore(incoming)
+    }
+
+    fn send(&mut self, transmit: &quinn_proto::Transmit, buffer: &[u8]) {
+        // This Result can be safely ignored, see https://github.com/quinn-rs/quinn/blob/0.11.1/quinn/src/endpoint.rs#L504
+        let _ = self.socket.send(&udp_transmit(&transmit, &buffer));
+    }
+
     fn set_default_client_config(&mut self, config: ClientConfig) {
         self.default_client_config = Some(config);
     }
@@ -370,24 +434,27 @@ pub(crate) fn poll_endpoints(
     let now = Instant::now();
     for EndpointItem {
         entity,
-        mut endpoint,
+        endpoint: mut endpoint_impl,
     } in endpoint_query.iter_mut()
     {
         let EndpointImpl {
             endpoint,
-            default_client_config: client_config,
+            default_client_config: _,
             connections,
             socket,
-        } = &mut *endpoint;
+        } = &mut *endpoint_impl;
+
+        let mut transmits = Vec::new();
 
         if let Err(e) = socket.receive(|meta, data| {
+            let mut response_buffer = Vec::new();
             match endpoint.handle(
                 now,
                 meta.addr,
                 meta.dst_ip,
                 meta.ecn.map(proto_ecn),
                 data,
-                &mut Vec::new(),
+                &mut response_buffer,
             ) {
                 Some(DatagramEvent::ConnectionEvent(handle, event)) => {
                     let mut connection = connections
@@ -398,28 +465,13 @@ pub(crate) fn poll_endpoints(
                     connection.handle_event(event);
                 }
                 Some(DatagramEvent::NewConnection(incoming)) => {
-                    if let Err(e) = endpoint.accept(incoming, now, &mut Vec::new(), None).map(
-                        |(handle, connection)| {
-                            let connection_entity = commands
-                                .spawn(Connection::new(entity, handle, connection))
-                                .id();
-
-                            connections
-                                .try_insert(handle, connection_entity)
-                                .expect("Got duplicate connection handle");
-                        },
-                    ) {
-                        if let Some(response) = e.response {
-                            todo!()
-                        }
-                        error_events.send(EntityError {
-                            entity,
-                            error: e.cause.into(),
-                        });
-                    }
+                    commands.spawn(Incoming {
+                        incoming,
+                        endpoint_entity: entity,
+                    });
                 }
                 Some(DatagramEvent::Response(transmit)) => {
-                    todo!()
+                    transmits.push((transmit, response_buffer));
                 }
                 None => {}
             }
@@ -428,6 +480,10 @@ pub(crate) fn poll_endpoints(
                 entity,
                 error: e.into(),
             });
+        }
+
+        for (transmit, buffer) in transmits {
+            endpoint_impl.send(&transmit, &buffer);
         }
     }
 }
@@ -447,5 +503,16 @@ fn proto_ecn(ecn: quinn_udp::EcnCodepoint) -> quinn_proto::EcnCodepoint {
         quinn_udp::EcnCodepoint::Ect0 => quinn_proto::EcnCodepoint::Ect0,
         quinn_udp::EcnCodepoint::Ect1 => quinn_proto::EcnCodepoint::Ect1,
         quinn_udp::EcnCodepoint::Ce => quinn_proto::EcnCodepoint::Ce,
+    }
+}
+
+#[inline]
+fn udp_transmit<'a>(transmit: &quinn_proto::Transmit, buffer: &'a [u8]) -> quinn_udp::Transmit<'a> {
+    quinn_udp::Transmit {
+        destination: transmit.destination,
+        ecn: transmit.ecn.map(udp_ecn),
+        contents: buffer,
+        segment_size: transmit.segment_size,
+        src_ip: transmit.src_ip,
     }
 }

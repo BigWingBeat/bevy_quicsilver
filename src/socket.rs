@@ -4,7 +4,7 @@ use std::{
 };
 
 use bytes::BytesMut;
-use quinn_udp::{RecvMeta, UdpSocketState};
+use quinn_udp::{RecvMeta, Transmit, UdpSocketState};
 
 #[derive(Debug)]
 pub(crate) struct UdpSocket {
@@ -83,5 +83,9 @@ impl UdpSocket {
                 },
             }
         }
+    }
+
+    pub(crate) fn send(&mut self, transmit: &Transmit) -> Result<()> {
+        self.state.send((&self.socket).into(), transmit)
     }
 }
