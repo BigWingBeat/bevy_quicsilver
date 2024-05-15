@@ -46,7 +46,7 @@ pub(crate) enum ErrorKind {
     #[error(transparent)]
     Connection(#[from] ConnectionError),
     #[error(transparent)]
-    Unreliable(#[from] SendDatagramError),
+    SendDatagram(#[from] SendDatagramError),
     #[error(transparent)]
     Read(#[from] ReadError),
     #[error(transparent)]

@@ -8,10 +8,10 @@ use bytes::Bytes;
 use hashbrown::HashMap;
 use quinn_proto::{
     congestion::Controller, ConnectionHandle, ConnectionStats, Dir, EndpointEvent, Event,
-    StreamEvent, StreamId, VarInt,
+    SendDatagramError, StreamEvent, StreamId, VarInt,
 };
 
-use crate::endpoint::Endpoint;
+use crate::{endpoint::Endpoint, Error};
 
 use std::{
     any::Any,
@@ -31,6 +31,7 @@ pub struct Connection {
     transmit_buf: Vec<u8>,
     pending_streams: Vec<Bytes>,
     pending_writes: HashMap<StreamId, Vec<Bytes>, EntityHash>,
+    pending_datagrams: Vec<Bytes>,
 }
 
 impl Connection {
@@ -48,7 +49,49 @@ impl Connection {
             transmit_buf: Vec::new(),
             pending_streams: Vec::new(),
             pending_writes: HashMap::default(),
+            pending_datagrams: Vec::new(),
         }
+    }
+
+    /// Transmit `data` as an unreliable, unordered application datagram
+    ///
+    /// Application datagrams are a low-level primitive. They may be lost or delivered out of order,
+    /// and `data` must both fit inside a single QUIC packet and be smaller than the maximum
+    /// dictated by the peer.
+    ///
+    /// Previously queued datagrams which are still unsent may be discarded to make space for this datagram,
+    /// in order of oldest to newest.
+    pub fn send_datagram(&mut self, data: Bytes) -> Result<(), Error> {
+        self.connection
+            .datagrams()
+            .send(data, true)
+            .map_err(Into::into)
+    }
+
+    /// Transmit `data` as an unreliable, unordered application datagram
+    ///
+    /// Unlike [`send_datagram()`], this method will wait for buffer space during congestion
+    /// conditions, which effectively prioritizes old datagrams over new datagrams.
+    ///
+    /// See [`send_datagram()`] for details.
+    ///
+    /// [`send_datagram()`]: Connection::send_datagram
+    pub fn send_datagram_wait(&mut self, data: Bytes) -> Result<(), Error> {
+        self.connection
+            .datagrams()
+            .send(data, false)
+            .or_else(|e| match e {
+                SendDatagramError::Blocked(data) => {
+                    self.pending_datagrams.push(data);
+                    Ok(())
+                }
+                _ => Err(e.into()),
+            })
+    }
+
+    /// Receive an unreliable, unordered application datagram
+    pub fn read_datagram(&mut self) -> Option<Bytes> {
+        self.connection.datagrams().recv()
     }
 
     /// Compute the maximum size of datagrams that can be sent.
