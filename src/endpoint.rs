@@ -381,7 +381,7 @@ impl EndpointImpl {
 
     fn send(&mut self, transmit: &quinn_proto::Transmit, buffer: &[u8]) {
         // This Result can be safely ignored, see https://github.com/quinn-rs/quinn/blob/0.11.1/quinn/src/endpoint.rs#L504
-        let _ = self.socket.send(&udp_transmit(&transmit, &buffer));
+        let _ = self.socket.send(&udp_transmit(transmit, buffer));
     }
 
     fn set_default_client_config(&mut self, config: ClientConfig) {

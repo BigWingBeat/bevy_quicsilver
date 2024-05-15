@@ -1,20 +1,18 @@
 use bevy_ecs::{entity::Entity, event::Event, query::QueryEntityError};
 use quinn_proto::{
-    AcceptError, ConnectError, ConnectionError, ReadError, RetryError, SendDatagramError,
+     ConnectError, ConnectionError, ReadError, RetryError, SendDatagramError,
     WriteError,
 };
 use thiserror::Error;
 
 pub use quinn_proto::{ClientConfig, ServerConfig};
 
-mod client;
 pub mod connection;
 pub mod crypto;
 pub mod endpoint;
+pub mod incoming;
 pub mod ip;
 mod plugin;
-// mod server;
-pub mod incoming;
 mod socket;
 
 #[derive(Debug, Event)]
