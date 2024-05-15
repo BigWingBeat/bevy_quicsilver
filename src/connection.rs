@@ -7,13 +7,16 @@ use bevy_time::{Real, Time, Timer, TimerMode};
 use bytes::Bytes;
 use hashbrown::HashMap;
 use quinn_proto::{
-    ConnectionHandle, ConnectionStats, Dir, EndpointEvent, Event, StreamEvent, StreamId,
+    congestion::Controller, ConnectionHandle, ConnectionStats, Dir, EndpointEvent, Event,
+    StreamEvent, StreamId, VarInt,
 };
 
 use crate::endpoint::Endpoint;
 
 use std::{
+    any::Any,
     iter,
+    net::{IpAddr, SocketAddr},
     time::{Duration, Instant},
 };
 
@@ -48,22 +51,119 @@ impl Connection {
         }
     }
 
+    /// Compute the maximum size of datagrams that can be sent.
+    ///
+    /// Returns `None` if datagrams are unsupported by the peer or disabled locally.
+    ///
+    /// This may change over the lifetime of a connection according to variation in the path MTU
+    /// estimate. The peer can also enforce an arbitrarily small fixed limit, but if the peer's
+    /// limit is large this is guaranteed to be a little over a kilobyte at minimum.
+    ///
+    /// Not necessarily the maximum size of received datagrams.
+    pub fn max_datagram_size(&self) -> Option<usize> {
+        self.connection.datagrams().max_size()
+    }
+
+    /// Bytes available in the outgoing datagram buffer
+    ///
+    /// When greater than zero, sending a datagram of at most this size is guaranteed not to cause older datagrams to be dropped.
+    pub fn datagram_send_buffer_space(&self) -> usize {
+        self.connection.datagrams().send_buffer_space()
+    }
+
+    /// The peer's UDP address
+    ///
+    /// If [`ServerConfig::migration()`] is `true`, clients may change addresses at will, e.g. when
+    /// switching to a cellular internet connection.
+    pub fn remote_address(&self) -> SocketAddr {
+        self.connection.remote_address()
+    }
+
+    /// The local IP address which was used when the peer established the connection
+    ///
+    /// This can be different from the address the endpoint is bound to, in case
+    /// the endpoint is bound to a wildcard address like `0.0.0.0` or `::`.
+    ///
+    /// This will return `None` for clients.
+    ///
+    /// Retrieving the local IP address is currently supported on the following
+    /// platforms:
+    /// - Linux
+    ///
+    /// On all non-supported platforms the local IP address will not be available,
+    /// and the method will return `None`.
+    pub fn local_ip(&self) -> Option<IpAddr> {
+        self.connection.local_ip()
+    }
+
+    /// Current best estimate of this connection's latency (round-trip time)
+    pub fn rtt(&self) -> Duration {
+        self.connection.rtt()
+    }
+
     /// Returns connection statistics
     pub fn stats(&self) -> ConnectionStats {
         self.connection.stats()
     }
 
-    /// Ping the remote endpoint
-    ///
-    /// Causes an ACK-eliciting packet to be transmitted.
-    pub fn ping(&mut self) {
-        self.connection.ping()
+    /// Current state of this connection's congestion control algorithm, for debugging purposes
+    pub fn congestion_state(&self) -> &dyn Controller {
+        self.connection.congestion_state()
     }
 
-    // /// Get a session reference
-    // pub fn crypto_session(&self) -> &dyn Session {
-    //     self.connection.lock().unwrap().crypto_session()
-    // }
+    /// Parameters negotiated during the handshake
+    ///
+    /// Guranteed to return `Some` on fully established connections.
+    /// The dynamic type returned is determined by the configured [`Session`].
+    /// For the default `rustls` session, it can be [`downcast`](Box::downcast) to a
+    /// [`crypto::rustls::HandshakeData`](crate::crypto::rustls::HandshakeData).
+    pub fn handshake_data(&self) -> Option<Box<dyn Any>> {
+        self.connection.crypto_session().handshake_data()
+    }
+
+    /// Cryptographic identity of the peer
+    ///
+    /// The dynamic type returned is determined by the configured [`Session`].
+    /// For the default `rustls` session, it can be [`downcast`](Box::downcast) to a
+    /// <code>Vec<[rustls::pki_types::CertificateDer]></code>
+    pub fn peer_identity(&self) -> Option<Box<dyn Any>> {
+        self.connection.crypto_session().peer_identity()
+    }
+
+    /// Derive keying material from this connection's TLS session secrets.
+    ///
+    /// When both peers call this method with the same `label` and `context`
+    /// arguments and `output` buffers of equal length, they will get the
+    /// same sequence of bytes in `output`. These bytes are cryptographically
+    /// strong and pseudorandom, and are suitable for use as keying material.
+    ///
+    /// See [RFC5705](https://tools.ietf.org/html/rfc5705) for more information.
+    pub fn export_keying_material(
+        &self,
+        output: &mut [u8],
+        label: &[u8],
+        context: &[u8],
+    ) -> Result<(), quinn_proto::crypto::ExportKeyingMaterialError> {
+        self.connection
+            .crypto_session()
+            .export_keying_material(output, label, context)
+    }
+
+    /// Modify the number of remotely initiated unidirectional streams that may be concurrently open
+    ///
+    /// No streams may be opened by the peer unless fewer than `count` are already open.
+    /// Large `count`s increase both minimum and worst-case memory consumption.
+    pub fn set_max_concurrent_uni_streams(&mut self, count: VarInt) {
+        self.connection.set_max_concurrent_streams(Dir::Uni, count)
+    }
+
+    /// Modify the number of remotely initiated bidirectional streams that may be concurrently open
+    ///
+    /// No streams may be opened by the peer unless fewer than `count` are already open.
+    /// Large `count`s increase both minimum and worst-case memory consumption.
+    pub fn set_max_concurrent_bi_streams(&mut self, count: VarInt) {
+        self.connection.set_max_concurrent_streams(Dir::Bi, count)
+    }
 
     /// Serialize the given packet and send it over the network
     // pub fn send<T: OutboundPacket>(&mut self, packet: T) -> Result<(), Error> {
@@ -157,6 +257,7 @@ impl Connection {
     fn poll_timeout(&mut self, now: Instant) {
         match self.connection.poll_timeout() {
             Some(timeout) => {
+                // If the timeout hasn't changed since the last call, avoid unnecessarily recreating the timer
                 if self
                     .timeout_timer
                     .as_ref()
@@ -165,7 +266,9 @@ impl Connection {
                 {
                     self.timeout_timer = Some((
                         Timer::new(
-                            timeout.checked_duration_since(now).unwrap(),
+                            timeout
+                                .checked_duration_since(now)
+                                .expect("Monotonicity violated"),
                             TimerMode::Once,
                         ),
                         timeout,
@@ -199,6 +302,7 @@ impl Connection {
     }
 }
 
+/// Based on https://github.com/quinn-rs/quinn/blob/0.11.1/quinn/src/connection.rs#L231
 pub(crate) fn poll_connections(
     mut query: Query<&mut Connection>,
     mut endpoint: Query<Endpoint>,
@@ -209,14 +313,15 @@ pub(crate) fn poll_connections(
         let mut endpoint = endpoint
             .get_mut(connection.endpoint)
             .expect("Endpoint entity was despawned");
-        let connection_handle = connection.handle;
 
         connection.handle_timeout(now, time.delta());
 
+        let connection_handle = connection.handle;
         let max_gso_segments = endpoint.max_gso_segments();
 
         while connection.should_poll {
             connection.should_poll = false;
+
             connection.poll_transmit(now, max_gso_segments);
             connection.poll_timeout(now);
             let events = connection

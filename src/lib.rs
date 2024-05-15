@@ -1,7 +1,6 @@
 use bevy_ecs::{entity::Entity, event::Event, query::QueryEntityError};
 use quinn_proto::{
-     ConnectError, ConnectionError, ReadError, RetryError, SendDatagramError,
-    WriteError,
+    ConnectError, ConnectionError, ReadError, RetryError, SendDatagramError, WriteError,
 };
 use thiserror::Error;
 
