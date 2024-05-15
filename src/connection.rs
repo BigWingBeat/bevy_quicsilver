@@ -103,14 +103,14 @@ impl Connection {
     /// limit is large this is guaranteed to be a little over a kilobyte at minimum.
     ///
     /// Not necessarily the maximum size of received datagrams.
-    pub fn max_datagram_size(&self) -> Option<usize> {
+    pub fn max_datagram_size(&mut self) -> Option<usize> {
         self.connection.datagrams().max_size()
     }
 
     /// Bytes available in the outgoing datagram buffer
     ///
     /// When greater than zero, sending a datagram of at most this size is guaranteed not to cause older datagrams to be dropped.
-    pub fn datagram_send_buffer_space(&self) -> usize {
+    pub fn datagram_send_buffer_space(&mut self) -> usize {
         self.connection.datagrams().send_buffer_space()
     }
 
