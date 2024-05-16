@@ -6,12 +6,21 @@ use std::{
 use bevy_ecs::{
     component::Component,
     entity::Entity,
+    event::{Event, EventWriter},
     query::{Added, QueryState, With},
+    system::Query,
     world::World,
 };
 use quinn_proto::ServerConfig;
 
-use crate::{connection::Connection, endpoint::Endpoint};
+use crate::{
+    connection::{ConnectionBundle, ConnectionImpl},
+    endpoint::Endpoint,
+};
+
+/// Event raised whenever an endpoint receives a new incoming client connection
+#[derive(Debug, Event)]
+pub struct NewIncoming(pub Entity);
 
 /// How to respond to an incoming client connection
 ///
@@ -78,6 +87,17 @@ impl Incoming {
     }
 }
 
+/// Events are sent in system using [`Added`] instead of where the component is actually inserted,
+/// because new events are visible immediately, but inserting components is deferred until `Commands` are applied
+pub(crate) fn send_new_incoming_events(
+    new_incomings: Query<Entity, Added<Incoming>>,
+    mut events: EventWriter<NewIncoming>,
+) {
+    for entity in new_incomings.iter() {
+        events.send(NewIncoming(entity));
+    }
+}
+
 pub(crate) fn handle_incoming_responses(
     world: &mut World,
     endpoints: &mut QueryState<Endpoint>,
@@ -114,7 +134,11 @@ pub(crate) fn handle_incoming_responses(
 
         match result {
             Ok(Some((handle, connection))) => {
-                incoming_entity.insert(Connection::new(endpoint_entity, handle, connection));
+                incoming_entity.insert(ConnectionBundle::new(ConnectionImpl::new(
+                    endpoint_entity,
+                    handle,
+                    connection,
+                )));
             }
             Ok(None) => incoming_entity.despawn(),
             Err(e) => todo!(),

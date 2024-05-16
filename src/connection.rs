@@ -1,7 +1,10 @@
 use bevy_ecs::{
+    bundle::Bundle,
     component::Component,
     entity::{Entity, EntityHash},
-    system::{Query, Res},
+    event::EventWriter,
+    query::{Added, QueryData},
+    system::{Commands, Query, Res},
 };
 use bevy_time::{Real, Time, Timer, TimerMode};
 use bytes::Bytes;
@@ -20,39 +23,95 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// A QUIC connection
-#[derive(Debug, Component)]
-pub struct Connection {
-    pub(crate) endpoint: Entity,
-    pub(crate) handle: ConnectionHandle,
-    connection: quinn_proto::Connection,
-    timeout_timer: Option<(Timer, Instant)>,
-    should_poll: bool,
-    transmit_buf: Vec<u8>,
-    pending_streams: Vec<Bytes>,
-    pending_writes: HashMap<StreamId, Vec<Bytes>, EntityHash>,
-    pending_datagrams: Vec<Bytes>,
+/// A bundle for adding a connection to an entity
+#[derive(Debug, Bundle)]
+pub struct ConnectionBundle {
+    marker: StillConnecting,
+    connection: ConnectionImpl,
 }
 
-impl Connection {
-    pub(crate) fn new(
-        endpoint: Entity,
-        handle: ConnectionHandle,
-        connection: quinn_proto::Connection,
-    ) -> Self {
+impl ConnectionBundle {
+    pub(crate) fn new(connection: ConnectionImpl) -> Self {
         Self {
-            endpoint,
-            handle,
+            marker: StillConnecting,
             connection,
-            timeout_timer: None,
-            should_poll: false,
-            transmit_buf: Vec::new(),
-            pending_streams: Vec::new(),
-            pending_writes: HashMap::default(),
-            pending_datagrams: Vec::new(),
         }
     }
+}
 
+/// Event raised whenever a [`Connecting`] entity finishes establishing the connection, turning into a [`Connection`] entity
+#[derive(Debug, bevy_ecs::event::Event)]
+pub struct ConnectionEstablished(pub Entity);
+
+/// Event raised when a [`Connecting`] entity's handshake data becomes available.
+/// After this event is raised, [`Connecting::handshake_data()`] will begin returning [`Some`]
+#[derive(Debug, bevy_ecs::event::Event)]
+pub struct HandshakeDataReady(pub Entity);
+
+/// Marker component type for connection entities that have not yet been fully established
+/// (i.e. exposed to the user through [`Connecting`])
+#[derive(Debug, Component)]
+struct StillConnecting;
+
+/// An in-progress connection attempt, that has not yet been fully established
+#[derive(Debug, QueryData)]
+pub struct Connecting {
+    marker: &'static StillConnecting,
+    connection: &'static ConnectionImpl,
+}
+
+impl ConnectingItem<'_> {
+    /// Parameters negotiated during the handshake
+    ///
+    /// Returns `None` until a [`HandshakeDataReady`] event is raised.
+    /// The dynamic type returned is determined by the configured [`Session`].
+    /// For the default `rustls` session, it can be [`downcast`](Box::downcast) to a
+    /// [`crypto::rustls::HandshakeData`](crate::crypto::rustls::HandshakeData).
+    pub fn handshake_data(&self) -> Option<Box<dyn Any>> {
+        self.connection.handshake_data()
+    }
+
+    /// The peer's UDP address
+    ///
+    /// If [`ServerConfig::migration()`] is `true`, clients may change addresses at will, e.g. when
+    /// switching to a cellular internet connection.
+    pub fn remote_address(&self) -> SocketAddr {
+        self.connection.remote_address()
+    }
+
+    /// The local IP address which was used when the peer established the connection
+    ///
+    /// This can be different from the address the endpoint is bound to, in case
+    /// the endpoint is bound to a wildcard address like `0.0.0.0` or `::`.
+    ///
+    /// This will return `None` for clients.
+    ///
+    /// Retrieving the local IP address is currently supported on the following
+    /// platforms:
+    /// - Linux
+    /// - ???, see https://github.com/quinn-rs/quinn/issues/1864
+    ///
+    /// On all non-supported platforms the local IP address will not be available,
+    /// and the method will return `None`.
+    pub fn local_ip(&self) -> Option<IpAddr> {
+        self.connection.local_ip()
+    }
+}
+
+/// Marker component type for connection entities that are fully established
+/// (i.e. exposed to the user through [`Connection`])
+#[derive(Debug, Component)]
+pub(crate) struct FullyConnected;
+
+/// A QUIC connection
+#[derive(Debug, QueryData)]
+#[query_data(mutable)]
+pub struct Connection {
+    marker: &'static FullyConnected,
+    connection: &'static mut ConnectionImpl,
+}
+
+impl ConnectionItem<'_> {
     /// Transmit `data` as an unreliable, unordered application datagram
     ///
     /// Application datagrams are a low-level primitive. They may be lost or delivered out of order,
@@ -62,10 +121,7 @@ impl Connection {
     /// Previously queued datagrams which are still unsent may be discarded to make space for this datagram,
     /// in order of oldest to newest.
     pub fn send_datagram(&mut self, data: Bytes) -> Result<(), Error> {
-        self.connection
-            .datagrams()
-            .send(data, true)
-            .map_err(Into::into)
+        self.connection.send_datagram(data)
     }
 
     /// Transmit `data` as an unreliable, unordered application datagram
@@ -77,21 +133,12 @@ impl Connection {
     ///
     /// [`send_datagram()`]: Connection::send_datagram
     pub fn send_datagram_wait(&mut self, data: Bytes) -> Result<(), Error> {
-        self.connection
-            .datagrams()
-            .send(data, false)
-            .or_else(|e| match e {
-                SendDatagramError::Blocked(data) => {
-                    self.pending_datagrams.push(data);
-                    Ok(())
-                }
-                _ => Err(e.into()),
-            })
+        self.connection.send_datagram_wait(data)
     }
 
     /// Receive an unreliable, unordered application datagram
     pub fn read_datagram(&mut self) -> Option<Bytes> {
-        self.connection.datagrams().recv()
+        self.connection.read_datagram()
     }
 
     /// Compute the maximum size of datagrams that can be sent.
@@ -104,14 +151,14 @@ impl Connection {
     ///
     /// Not necessarily the maximum size of received datagrams.
     pub fn max_datagram_size(&mut self) -> Option<usize> {
-        self.connection.datagrams().max_size()
+        self.connection.max_datagram_size()
     }
 
     /// Bytes available in the outgoing datagram buffer
     ///
     /// When greater than zero, sending a datagram of at most this size is guaranteed not to cause older datagrams to be dropped.
     pub fn datagram_send_buffer_space(&mut self) -> usize {
-        self.connection.datagrams().send_buffer_space()
+        self.connection.datagram_send_buffer_space()
     }
 
     /// The peer's UDP address
@@ -162,7 +209,7 @@ impl Connection {
     /// For the default `rustls` session, it can be [`downcast`](Box::downcast) to a
     /// [`crypto::rustls::HandshakeData`](crate::crypto::rustls::HandshakeData).
     pub fn handshake_data(&self) -> Option<Box<dyn Any>> {
-        self.connection.crypto_session().handshake_data()
+        self.connection.handshake_data()
     }
 
     /// Cryptographic identity of the peer
@@ -171,7 +218,7 @@ impl Connection {
     /// For the default `rustls` session, it can be [`downcast`](Box::downcast) to a
     /// <code>Vec<[rustls::pki_types::CertificateDer]></code>
     pub fn peer_identity(&self) -> Option<Box<dyn Any>> {
-        self.connection.crypto_session().peer_identity()
+        self.connection.peer_identity()
     }
 
     /// Derive keying material from this connection's TLS session secrets.
@@ -189,7 +236,6 @@ impl Connection {
         context: &[u8],
     ) -> Result<(), quinn_proto::crypto::ExportKeyingMaterialError> {
         self.connection
-            .crypto_session()
             .export_keying_material(output, label, context)
     }
 
@@ -198,7 +244,7 @@ impl Connection {
     /// No streams may be opened by the peer unless fewer than `count` are already open.
     /// Large `count`s increase both minimum and worst-case memory consumption.
     pub fn set_max_concurrent_uni_streams(&mut self, count: VarInt) {
-        self.connection.set_max_concurrent_streams(Dir::Uni, count)
+        self.connection.set_max_concurrent_uni_streams(count)
     }
 
     /// Modify the number of remotely initiated bidirectional streams that may be concurrently open
@@ -206,6 +252,199 @@ impl Connection {
     /// No streams may be opened by the peer unless fewer than `count` are already open.
     /// Large `count`s increase both minimum and worst-case memory consumption.
     pub fn set_max_concurrent_bi_streams(&mut self, count: VarInt) {
+        self.connection.set_max_concurrent_bi_streams(count)
+    }
+}
+
+impl ConnectionReadOnlyItem<'_> {
+    /// The peer's UDP address
+    ///
+    /// If [`ServerConfig::migration()`] is `true`, clients may change addresses at will, e.g. when
+    /// switching to a cellular internet connection.
+    pub fn remote_address(&self) -> SocketAddr {
+        self.connection.remote_address()
+    }
+
+    /// The local IP address which was used when the peer established the connection
+    ///
+    /// This can be different from the address the endpoint is bound to, in case
+    /// the endpoint is bound to a wildcard address like `0.0.0.0` or `::`.
+    ///
+    /// This will return `None` for clients.
+    ///
+    /// Retrieving the local IP address is currently supported on the following
+    /// platforms:
+    /// - Linux
+    /// - ???, see https://github.com/quinn-rs/quinn/issues/1864
+    ///
+    /// On all non-supported platforms the local IP address will not be available,
+    /// and the method will return `None`.
+    pub fn local_ip(&self) -> Option<IpAddr> {
+        self.connection.local_ip()
+    }
+
+    /// Current best estimate of this connection's latency (round-trip time)
+    pub fn rtt(&self) -> Duration {
+        self.connection.rtt()
+    }
+
+    /// Returns connection statistics
+    pub fn stats(&self) -> ConnectionStats {
+        self.connection.stats()
+    }
+
+    /// Current state of this connection's congestion control algorithm, for debugging purposes
+    pub fn congestion_state(&self) -> &dyn Controller {
+        self.connection.congestion_state()
+    }
+
+    /// Parameters negotiated during the handshake
+    ///
+    /// Guranteed to return `Some` on fully established connections.
+    /// The dynamic type returned is determined by the configured [`Session`].
+    /// For the default `rustls` session, it can be [`downcast`](Box::downcast) to a
+    /// [`crypto::rustls::HandshakeData`](crate::crypto::rustls::HandshakeData).
+    pub fn handshake_data(&self) -> Option<Box<dyn Any>> {
+        self.connection.handshake_data()
+    }
+
+    /// Cryptographic identity of the peer
+    ///
+    /// The dynamic type returned is determined by the configured [`Session`].
+    /// For the default `rustls` session, it can be [`downcast`](Box::downcast) to a
+    /// <code>Vec<[rustls::pki_types::CertificateDer]></code>
+    pub fn peer_identity(&self) -> Option<Box<dyn Any>> {
+        self.connection.peer_identity()
+    }
+
+    /// Derive keying material from this connection's TLS session secrets.
+    ///
+    /// When both peers call this method with the same `label` and `context`
+    /// arguments and `output` buffers of equal length, they will get the
+    /// same sequence of bytes in `output`. These bytes are cryptographically
+    /// strong and pseudorandom, and are suitable for use as keying material.
+    ///
+    /// See [RFC5705](https://tools.ietf.org/html/rfc5705) for more information.
+    pub fn export_keying_material(
+        &self,
+        output: &mut [u8],
+        label: &[u8],
+        context: &[u8],
+    ) -> Result<(), quinn_proto::crypto::ExportKeyingMaterialError> {
+        self.connection
+            .export_keying_material(output, label, context)
+    }
+}
+
+/// Underlying component type behind the [`Connecting`] and [`Connection`] querydata types
+#[derive(Debug, Component)]
+pub(crate) struct ConnectionImpl {
+    pub(crate) endpoint: Entity,
+    pub(crate) handle: ConnectionHandle,
+    connection: quinn_proto::Connection,
+    timeout_timer: Option<(Timer, Instant)>,
+    should_poll: bool,
+    transmit_buf: Vec<u8>,
+    pending_streams: Vec<Bytes>,
+    pending_writes: HashMap<StreamId, Vec<Bytes>, EntityHash>,
+    pending_datagrams: Vec<Bytes>,
+}
+
+impl ConnectionImpl {
+    pub(crate) fn new(
+        endpoint: Entity,
+        handle: ConnectionHandle,
+        connection: quinn_proto::Connection,
+    ) -> Self {
+        Self {
+            endpoint,
+            handle,
+            connection,
+            timeout_timer: None,
+            should_poll: false,
+            transmit_buf: Vec::new(),
+            pending_streams: Vec::new(),
+            pending_writes: HashMap::default(),
+            pending_datagrams: Vec::new(),
+        }
+    }
+
+    fn send_datagram(&mut self, data: Bytes) -> Result<(), Error> {
+        self.connection
+            .datagrams()
+            .send(data, true)
+            .map_err(Into::into)
+    }
+
+    fn send_datagram_wait(&mut self, data: Bytes) -> Result<(), Error> {
+        self.connection
+            .datagrams()
+            .send(data, false)
+            .or_else(|e| match e {
+                SendDatagramError::Blocked(data) => {
+                    self.pending_datagrams.push(data);
+                    Ok(())
+                }
+                _ => Err(e.into()),
+            })
+    }
+
+    fn read_datagram(&mut self) -> Option<Bytes> {
+        self.connection.datagrams().recv()
+    }
+
+    fn max_datagram_size(&mut self) -> Option<usize> {
+        self.connection.datagrams().max_size()
+    }
+
+    fn datagram_send_buffer_space(&mut self) -> usize {
+        self.connection.datagrams().send_buffer_space()
+    }
+
+    fn remote_address(&self) -> SocketAddr {
+        self.connection.remote_address()
+    }
+
+    fn local_ip(&self) -> Option<IpAddr> {
+        self.connection.local_ip()
+    }
+
+    fn rtt(&self) -> Duration {
+        self.connection.rtt()
+    }
+
+    fn stats(&self) -> ConnectionStats {
+        self.connection.stats()
+    }
+
+    fn congestion_state(&self) -> &dyn Controller {
+        self.connection.congestion_state()
+    }
+
+    fn handshake_data(&self) -> Option<Box<dyn Any>> {
+        self.connection.crypto_session().handshake_data()
+    }
+
+    fn peer_identity(&self) -> Option<Box<dyn Any>> {
+        self.connection.crypto_session().peer_identity()
+    }
+
+    fn export_keying_material(
+        &self,
+        output: &mut [u8],
+        label: &[u8],
+        context: &[u8],
+    ) -> Result<(), quinn_proto::crypto::ExportKeyingMaterialError> {
+        self.connection
+            .crypto_session()
+            .export_keying_material(output, label, context)
+    }
+
+    fn set_max_concurrent_uni_streams(&mut self, count: VarInt) {
+        self.connection.set_max_concurrent_streams(Dir::Uni, count)
+    }
+
+    fn set_max_concurrent_bi_streams(&mut self, count: VarInt) {
         self.connection.set_max_concurrent_streams(Dir::Bi, count)
     }
 
@@ -327,33 +566,32 @@ impl Connection {
         std::iter::from_fn(|| self.connection.poll_endpoint_events())
     }
 
-    fn poll(&mut self) {
-        while let Some(poll) = self.connection.poll() {
-            match poll {
-                Event::HandshakeDataReady => {}
-                Event::Connected => todo!(),
-                Event::ConnectionLost { reason } => todo!(),
-                Event::Stream(StreamEvent::Opened { dir }) => todo!(),
-                Event::Stream(StreamEvent::Readable { id }) => todo!(),
-                Event::Stream(StreamEvent::Writable { id }) => todo!(),
-                Event::Stream(StreamEvent::Finished { id }) => {}
-                Event::Stream(StreamEvent::Stopped { id, error_code }) => todo!(),
-                Event::Stream(StreamEvent::Available { dir }) => todo!(),
-                Event::DatagramReceived => todo!(),
-                Event::DatagramsUnblocked => todo!(),
-            }
-        }
+    fn poll(&mut self) -> Option<Event> {
+        self.connection.poll()
+    }
+}
+
+/// Events are sent in system using [`Added`] instead of where the component is actually inserted,
+/// because new events are visible immediately, but inserting components is deferred until `Commands` are applied
+pub(crate) fn send_connection_established_events(
+    connections: Query<Entity, Added<FullyConnected>>,
+    mut events: EventWriter<ConnectionEstablished>,
+) {
+    for entity in connections.iter() {
+        events.send(ConnectionEstablished(entity));
     }
 }
 
 /// Based on https://github.com/quinn-rs/quinn/blob/0.11.1/quinn/src/connection.rs#L231
 pub(crate) fn poll_connections(
-    mut query: Query<&mut Connection>,
+    mut commands: Commands,
+    mut query: Query<(Entity, &mut ConnectionImpl)>,
     mut endpoint: Query<Endpoint>,
+    mut handshake_events: EventWriter<HandshakeDataReady>,
     time: Res<Time<Real>>,
 ) {
     let now = Instant::now();
-    for mut connection in query.iter_mut() {
+    for (entity, mut connection) in query.iter_mut() {
         let mut endpoint = endpoint
             .get_mut(connection.endpoint)
             .expect("Endpoint entity was despawned");
@@ -372,7 +610,29 @@ pub(crate) fn poll_connections(
                 .poll_endpoint_events()
                 .filter_map(|event| endpoint.handle_event(connection_handle, event))
                 .collect::<Vec<_>>();
-            connection.poll();
+
+            while let Some(event) = connection.poll() {
+                match event {
+                    Event::HandshakeDataReady => {
+                        handshake_events.send(HandshakeDataReady(entity));
+                    }
+                    Event::Connected => {
+                        commands
+                            .entity(entity)
+                            .remove::<StillConnecting>()
+                            .insert(FullyConnected);
+                    }
+                    Event::ConnectionLost { reason } => todo!(),
+                    Event::Stream(StreamEvent::Opened { dir }) => todo!(),
+                    Event::Stream(StreamEvent::Readable { id }) => todo!(),
+                    Event::Stream(StreamEvent::Writable { id }) => todo!(),
+                    Event::Stream(StreamEvent::Finished { id }) => {}
+                    Event::Stream(StreamEvent::Stopped { id, error_code }) => todo!(),
+                    Event::Stream(StreamEvent::Available { dir }) => todo!(),
+                    Event::DatagramReceived => todo!(),
+                    Event::DatagramsUnblocked => todo!(),
+                }
+            }
 
             // Process events after finishing polling instead of immediately
             for event in events {

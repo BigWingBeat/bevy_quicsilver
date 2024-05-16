@@ -14,7 +14,12 @@ use quinn_proto::{
     EndpointConfig, EndpointEvent, ServerConfig,
 };
 
-use crate::{connection::Connection, incoming::Incoming, socket::UdpSocket, EntityError, Error};
+use crate::{
+    connection::{ConnectionBundle, ConnectionImpl},
+    incoming::Incoming,
+    socket::UdpSocket,
+    EntityError, Error,
+};
 
 /// A bundle for adding an [`Endpoint`] to an entity
 #[derive(Debug, Bundle)]
@@ -129,7 +134,7 @@ impl EndpointItem<'_> {
     }
 
     /// Initiate a connection with the remote endpoint identified by the specified address and server name,
-    /// using the default client config. The returned [`Connection`] component should be inserted onto an entity.
+    /// using the default client config. The returned [`ConnectionBundle`] should be inserted onto an entity.
     ///
     /// The exact value of the `server_name` parameter must be included in the `subject_alt_names` field of the server's certificate,
     /// as described by [`config_with_gen_self_signed`].
@@ -139,13 +144,13 @@ impl EndpointItem<'_> {
         &mut self,
         server_address: SocketAddr,
         server_name: &str,
-    ) -> Result<Connection, Error> {
+    ) -> Result<ConnectionBundle, Error> {
         self.endpoint
             .connect(self.entity, server_address, server_name)
     }
 
     /// Initiate a connection with the remote endpoint identified by the specified address and server name,
-    /// using the specified client config. The returned [`Connection`] component should be inserted onto an entity.
+    /// using the specified client config. The returned [`ConnectionBundle`] should be inserted onto an entity.
     ///
     /// The exact value of the `server_name` parameter must be included in the `subject_alt_names` field of the server's certificate,
     /// as described by [`config_with_gen_self_signed`].
@@ -156,7 +161,7 @@ impl EndpointItem<'_> {
         server_address: SocketAddr,
         server_name: &str,
         client_config: ClientConfig,
-    ) -> Result<Connection, Error> {
+    ) -> Result<ConnectionBundle, Error> {
         self.endpoint
             .connect_with(self.entity, server_address, server_name, client_config)
     }
@@ -316,7 +321,7 @@ impl EndpointImpl {
         self_entity: Entity,
         server_address: SocketAddr,
         server_name: &str,
-    ) -> Result<Connection, Error> {
+    ) -> Result<ConnectionBundle, Error> {
         self.default_client_config
             .clone()
             .ok_or(ConnectError::NoDefaultClientConfig.into())
@@ -331,13 +336,15 @@ impl EndpointImpl {
         server_address: SocketAddr,
         server_name: &str,
         client_config: ClientConfig,
-    ) -> Result<Connection, Error> {
+    ) -> Result<ConnectionBundle, Error> {
         let now = Instant::now();
         // TODO: Why https://github.com/quinn-rs/quinn/blob/0.10.2/quinn/src/endpoint.rs#L185-L192
         self.endpoint
             .connect(now, client_config, server_address, server_name)
             .map_err(Into::into)
-            .map(|(handle, connection)| Connection::new(self_entity, handle, connection))
+            .map(|(handle, connection)| {
+                ConnectionBundle::new(ConnectionImpl::new(self_entity, handle, connection))
+            })
     }
 
     fn accept(
@@ -410,7 +417,7 @@ impl EndpointImpl {
 }
 
 pub(crate) fn find_new_connections(
-    new_connections: Query<(Entity, &Connection), Added<Connection>>,
+    new_connections: Query<(Entity, &ConnectionImpl), Added<ConnectionImpl>>,
     mut endpoints: Query<Endpoint>,
 ) {
     for (entity, connection) in new_connections.iter() {
@@ -428,7 +435,7 @@ pub(crate) fn find_new_connections(
 pub(crate) fn poll_endpoints(
     mut commands: Commands,
     mut endpoint_query: Query<Endpoint>,
-    mut connection_query: Query<&mut Connection>,
+    mut connection_query: Query<&mut ConnectionImpl>,
     mut error_events: EventWriter<EntityError>,
 ) {
     let now = Instant::now();
