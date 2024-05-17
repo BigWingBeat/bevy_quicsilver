@@ -93,10 +93,16 @@ impl IncomingResponse {
 ///
 /// # Usage
 /// ```
-/// fn my_system(mut commands: Commands, incomings: Query<(Entity, &Incoming), Added<Incoming>>) {
-///     for (entity, incoming) in incomings.iter() {
+/// fn my_system(
+///     mut commands: Commands,
+///     query: Query<&Incoming>,
+///     incomings: EventReader<NewIncoming>,
+///     mut responses: EventWriter<IncomingResponse>,
+/// ) {
+///     for NewIncoming(entity) in incomings.read() {
+///         let incoming = query.get(entity).unwrap();
 ///         println!("New client connecting from {:?}", incoming.remote_address());
-///         commands.entity(entity).insert(IncomingResponse::Accept);
+///         responses.send(IncomingResponse::accept(entity));
 ///     }
 /// }
 /// ```
