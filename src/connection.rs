@@ -11,7 +11,7 @@ use bytes::Bytes;
 use hashbrown::HashMap;
 use quinn_proto::{
     congestion::Controller, ConnectionHandle, ConnectionStats, Dir, EndpointEvent, Event,
-    SendDatagramError, StreamEvent, StreamId, VarInt,
+    SendDatagramError, StreamEvent, StreamId, Transmit, VarInt,
 };
 
 use crate::{endpoint::Endpoint, Error};
@@ -344,6 +344,7 @@ pub(crate) struct ConnectionImpl {
     connection: quinn_proto::Connection,
     timeout_timer: Option<(Timer, Instant)>,
     should_poll: bool,
+    blocked_transmit: Option<Transmit>,
     transmit_buf: Vec<u8>,
     pending_streams: Vec<Bytes>,
     pending_writes: HashMap<StreamId, Vec<Bytes>, EntityHash>,
@@ -362,6 +363,7 @@ impl ConnectionImpl {
             connection,
             timeout_timer: None,
             should_poll: false,
+            blocked_transmit: None,
             transmit_buf: Vec::new(),
             pending_streams: Vec::new(),
             pending_writes: HashMap::default(),
@@ -528,13 +530,23 @@ impl ConnectionImpl {
         }
     }
 
-    fn poll_transmit(&mut self, now: Instant, max_datagrams: usize) {
-        while let Some(transmit) =
-            self.connection
-                .poll_transmit(now, max_datagrams, &mut self.transmit_buf)
-        {
-            todo!()
+    fn poll_transmit(&mut self, now: Instant, max_datagrams: usize) -> Option<(Transmit, &[u8])> {
+        // Based on https://github.com/quinn-rs/quinn/blob/0.11.1/quinn/src/connection.rs#L952
+        if let Some(transmit) = self.blocked_transmit.take() {
+            let data = &self.transmit_buf[..transmit.size];
+            return Some((transmit, data));
         }
+
+        self.transmit_buf.clear();
+        self.transmit_buf
+            .reserve(self.connection.current_mtu() as _);
+
+        self.connection
+            .poll_transmit(now, max_datagrams, &mut self.transmit_buf)
+            .map(|transmit| {
+                let data = &self.transmit_buf[..transmit.size];
+                (transmit, data)
+            })
     }
 
     fn poll_timeout(&mut self, now: Instant) {
@@ -566,8 +578,8 @@ impl ConnectionImpl {
         std::iter::from_fn(|| self.connection.poll_endpoint_events())
     }
 
-    fn poll(&mut self) -> Option<Event> {
-        self.connection.poll()
+    fn poll(&mut self) -> impl Iterator<Item = Event> + '_ {
+        std::iter::from_fn(|| self.connection.poll())
     }
 }
 
@@ -599,19 +611,37 @@ pub(crate) fn poll_connections(
         connection.handle_timeout(now, time.delta());
 
         let connection_handle = connection.handle;
-        let max_gso_segments = endpoint.max_gso_segments();
+        let max_datagrams = endpoint.max_gso_segments();
 
         while connection.should_poll {
             connection.should_poll = false;
 
-            connection.poll_transmit(now, max_gso_segments);
+            // The polling methods must be called in order:
+            // (See https://docs.rs/quinn-proto/latest/quinn_proto/struct.Connection.html)
+
+            // #1: poll_transmit
+            while let Some((transmit, data)) = connection.poll_transmit(now, max_datagrams) {
+                match endpoint.send(&transmit, data) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        connection.blocked_transmit = Some(transmit);
+                        break;
+                    }
+                    Err(e) => todo!(),
+                }
+            }
+
+            // #2: poll_timeout
             connection.poll_timeout(now);
+
+            // #3: poll_endpoint_events
             let events = connection
                 .poll_endpoint_events()
                 .filter_map(|event| endpoint.handle_event(connection_handle, event))
                 .collect::<Vec<_>>();
 
-            while let Some(event) = connection.poll() {
+            // #4: poll
+            for event in connection.poll() {
                 match event {
                     Event::HandshakeDataReady => {
                         handshake_events.send(HandshakeDataReady(entity));

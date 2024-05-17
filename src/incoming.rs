@@ -8,7 +8,7 @@ use bevy_ecs::{
     entity::Entity,
     event::{Event, EventWriter},
     query::{Added, QueryState, With},
-    system::Query,
+    system::{Query, SystemState},
     world::World,
 };
 use quinn_proto::ServerConfig;
@@ -16,6 +16,7 @@ use quinn_proto::ServerConfig;
 use crate::{
     connection::{ConnectionBundle, ConnectionImpl},
     endpoint::Endpoint,
+    EntityError,
 };
 
 /// Event raised whenever an endpoint receives a new incoming client connection
@@ -102,6 +103,7 @@ pub(crate) fn handle_incoming_responses(
     world: &mut World,
     endpoints: &mut QueryState<Endpoint>,
     incomings: &mut QueryState<Entity, (With<Incoming>, Added<IncomingResponse>)>,
+    error_events: &mut SystemState<EventWriter<EntityError>>,
 ) {
     let incomings = incomings.iter(world).collect::<Vec<_>>();
     for incoming_entity in incomings {
@@ -141,7 +143,14 @@ pub(crate) fn handle_incoming_responses(
                 )));
             }
             Ok(None) => incoming_entity.despawn(),
-            Err(e) => todo!(),
+            Err(error) => {
+                let incoming_entity = incoming_entity.id();
+                let mut error_events = error_events.get_mut(world);
+                error_events.send(EntityError {
+                    entity: incoming_entity,
+                    error,
+                });
+            }
         }
     }
 }

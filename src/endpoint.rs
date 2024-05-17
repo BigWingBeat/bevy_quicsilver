@@ -209,6 +209,15 @@ impl EndpointItem<'_> {
     pub(crate) fn max_gso_segments(&self) -> usize {
         self.endpoint.max_gso_segments()
     }
+
+    /// Send some data over the network
+    pub(crate) fn send(
+        &self,
+        transmit: &quinn_proto::Transmit,
+        buffer: &[u8],
+    ) -> Result<(), std::io::Error> {
+        self.endpoint.send(transmit, buffer)
+    }
 }
 
 impl EndpointReadOnlyItem<'_> {
@@ -224,6 +233,15 @@ impl EndpointReadOnlyItem<'_> {
 
     pub(crate) fn max_gso_segments(&self) -> usize {
         self.endpoint.max_gso_segments()
+    }
+
+    /// Send some data over the network
+    pub(crate) fn send(
+        &self,
+        transmit: &quinn_proto::Transmit,
+        buffer: &[u8],
+    ) -> Result<(), std::io::Error> {
+        self.endpoint.send(transmit, buffer)
     }
 }
 
@@ -362,7 +380,7 @@ impl EndpointImpl {
             )
             .map_err(|AcceptError { cause, response }| {
                 if let Some(response) = response {
-                    self.send(&response, &response_buffer);
+                    self.send_response(&response, &response_buffer);
                 }
                 cause.into()
             })
@@ -371,14 +389,14 @@ impl EndpointImpl {
     fn refuse(&mut self, incoming: quinn_proto::Incoming) {
         let mut response_buffer = Vec::new();
         let transmit = self.endpoint.refuse(incoming, &mut response_buffer);
-        self.send(&transmit, &response_buffer);
+        self.send_response(&transmit, &response_buffer);
     }
 
     fn retry(&mut self, incoming: quinn_proto::Incoming) -> Result<(), Error> {
         let mut response_buffer = Vec::new();
         self.endpoint
             .retry(incoming, &mut response_buffer)
-            .map(|transmit| self.send(&transmit, &response_buffer))
+            .map(|transmit| self.send_response(&transmit, &response_buffer))
             .map_err(Into::into)
     }
 
@@ -386,9 +404,18 @@ impl EndpointImpl {
         self.endpoint.ignore(incoming)
     }
 
-    fn send(&mut self, transmit: &quinn_proto::Transmit, buffer: &[u8]) {
-        // This Result can be safely ignored, see https://github.com/quinn-rs/quinn/blob/0.11.1/quinn/src/endpoint.rs#L504
-        let _ = self.socket.send(&udp_transmit(transmit, buffer));
+    /// Internal method for endpoint-generated data, which can safely ignore the Result
+    /// See https://github.com/quinn-rs/quinn/blob/0.11.1/quinn/src/endpoint.rs#L504
+    fn send_response(&self, transmit: &quinn_proto::Transmit, buffer: &[u8]) {
+        let _ = self.send(transmit, buffer);
+    }
+
+    pub(crate) fn send(
+        &self,
+        transmit: &quinn_proto::Transmit,
+        buffer: &[u8],
+    ) -> Result<(), std::io::Error> {
+        self.socket.send(&udp_transmit(transmit, buffer))
     }
 
     fn set_default_client_config(&mut self, config: ClientConfig) {
@@ -490,7 +517,7 @@ pub(crate) fn poll_endpoints(
         }
 
         for (transmit, buffer) in transmits {
-            endpoint_impl.send(&transmit, &buffer);
+            endpoint_impl.send_response(&transmit, &buffer);
         }
     }
 }

@@ -85,7 +85,7 @@ impl UdpSocket {
         }
     }
 
-    pub(crate) fn send(&mut self, transmit: &Transmit) -> Result<()> {
+    pub(crate) fn send(&self, transmit: &Transmit) -> Result<()> {
         self.state.send((&self.socket).into(), transmit)
     }
 }
