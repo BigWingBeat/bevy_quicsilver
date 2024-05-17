@@ -1,4 +1,4 @@
-use bevy_ecs::{entity::Entity, event::Event, query::QueryEntityError};
+use bevy_ecs::{component::Component, entity::Entity, event::Event, query::QueryEntityError};
 use quinn_proto::{
     ConnectError, ConnectionError, ReadError, RetryError, SendDatagramError, WriteError,
 };
@@ -13,6 +13,10 @@ pub mod incoming;
 pub mod ip;
 mod plugin;
 mod socket;
+
+/// If this component is placed on an entity, it will never be automatically despawned by this library
+#[derive(Debug, Component)]
+pub struct KeepAlive;
 
 #[derive(Debug, Event)]
 pub struct EntityError {

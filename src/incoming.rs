@@ -7,7 +7,7 @@ use bevy_ecs::{
     component::Component,
     entity::Entity,
     event::{Event, EventWriter},
-    query::{Added, QueryState, With},
+    query::{Added, Has, QueryState, With},
     system::{Query, SystemState},
     world::World,
 };
@@ -16,7 +16,7 @@ use quinn_proto::ServerConfig;
 use crate::{
     connection::{ConnectionBundle, ConnectionImpl},
     endpoint::Endpoint,
-    EntityError,
+    EntityError, KeepAlive,
 };
 
 /// Event raised whenever an endpoint receives a new incoming client connection
@@ -102,11 +102,11 @@ pub(crate) fn send_new_incoming_events(
 pub(crate) fn handle_incoming_responses(
     world: &mut World,
     endpoints: &mut QueryState<Endpoint>,
-    incomings: &mut QueryState<Entity, (With<Incoming>, Added<IncomingResponse>)>,
+    incomings: &mut QueryState<(Entity, Has<KeepAlive>), (With<Incoming>, Added<IncomingResponse>)>,
     error_events: &mut SystemState<EventWriter<EntityError>>,
 ) {
     let incomings = incomings.iter(world).collect::<Vec<_>>();
-    for incoming_entity in incomings {
+    for (incoming_entity, keepalive) in incomings {
         let mut incoming_entity = world.entity_mut(incoming_entity);
         let (incoming, response) = incoming_entity
             .take::<(Incoming, IncomingResponse)>()
@@ -142,7 +142,11 @@ pub(crate) fn handle_incoming_responses(
                     connection,
                 )));
             }
-            Ok(None) => incoming_entity.despawn(),
+            Ok(None) => {
+                if !keepalive {
+                    incoming_entity.despawn()
+                }
+            }
             Err(error) => {
                 let incoming_entity = incoming_entity.id();
                 let mut error_events = error_events.get_mut(world);
