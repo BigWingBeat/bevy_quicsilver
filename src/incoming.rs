@@ -7,7 +7,7 @@ use bevy_ecs::{
     component::Component,
     entity::Entity,
     event::{Event, EventReader, EventWriter},
-    query::{Added, QueryState},
+    query::{Added, QueryEntityError, QueryState},
     system::{Query, SystemState},
     world::World,
 };
@@ -177,7 +177,13 @@ pub(crate) fn handle_incoming_responses(
         let incoming = incoming.incoming;
 
         let result = incoming_entity.world_scope(|world| {
-            let mut endpoint = endpoints.get_mut(world, endpoint_entity).unwrap();
+            let mut endpoint = match endpoints.get_mut(world, endpoint_entity) {
+                Ok(endpoint) => endpoint,
+                Err(QueryEntityError::QueryDoesNotMatch(_)) // If the endpoint does not exist anymore, neither should we
+                | Err(QueryEntityError::NoSuchEntity(_)) => return Ok(None),
+                Err(QueryEntityError::AliasedMutability(_)) => unreachable!(),
+            };
+
             match response.response {
                 IncomingResponseType::Accept(config) => endpoint.accept(incoming, config).map(Some),
                 IncomingResponseType::Refuse => {
@@ -193,6 +199,7 @@ pub(crate) fn handle_incoming_responses(
         });
 
         match result {
+            // Connection successfully accepted
             Ok(Some((handle, connection))) => {
                 incoming_entity.insert(ConnectionBundle::new(ConnectionImpl::new(
                     endpoint_entity,
@@ -200,9 +207,10 @@ pub(crate) fn handle_incoming_responses(
                     connection,
                 )));
             }
+            // Connection refused, retried or ignored
             Ok(None) => {
                 if !incoming_entity.contains::<KeepAlive>() {
-                    incoming_entity.despawn()
+                    incoming_entity.despawn();
                 }
             }
             Err(error) => {
