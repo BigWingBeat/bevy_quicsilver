@@ -25,6 +25,15 @@ pub struct EntityError {
     pub error: Error,
 }
 
+impl EntityError {
+    pub(crate) fn new(entity: Entity, error: impl Into<Error>) -> Self {
+        Self {
+            entity,
+            error: error.into(),
+        }
+    }
+}
+
 /// Opaque library error type
 #[derive(Debug, Error)]
 #[error(transparent)]

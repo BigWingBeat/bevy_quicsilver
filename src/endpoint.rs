@@ -480,7 +480,7 @@ pub(crate) fn poll_endpoints(
 
         let mut transmits = Vec::new();
 
-        if let Err(e) = socket.receive(|meta, data| {
+        if let Err(error) = socket.receive(|meta, data| {
             let mut response_buffer = Vec::new();
             match endpoint.handle(
                 now,
@@ -510,10 +510,7 @@ pub(crate) fn poll_endpoints(
                 None => {}
             }
         }) {
-            error_events.send(EntityError {
-                entity,
-                error: e.into(),
-            });
+            error_events.send(EntityError::new(entity, error));
         }
 
         for (transmit, buffer) in transmits {

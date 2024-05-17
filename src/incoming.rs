@@ -160,10 +160,10 @@ pub(crate) fn handle_incoming_responses(
         let incoming_entity_id = incoming_entity.id();
 
         let Some(incoming) = incoming_entity.take::<Incoming>() else {
-            error_events.get_mut(world).send(EntityError {
-                entity: incoming_entity_id,
-                error: ErrorKind::missing_component::<Incoming>().into(),
-            });
+            error_events.get_mut(world).send(EntityError::new(
+                incoming_entity_id,
+                ErrorKind::missing_component::<Incoming>(),
+            ));
             continue;
         };
 
@@ -200,10 +200,9 @@ pub(crate) fn handle_incoming_responses(
                 }
             }
             Err(error) => {
-                error_events.get_mut(world).send(EntityError {
-                    entity: incoming_entity_id,
-                    error,
-                });
+                error_events
+                    .get_mut(world)
+                    .send(EntityError::new(incoming_entity_id, error));
             }
         }
     }
