@@ -1,4 +1,4 @@
-use bevy_ecs::{component::Component, entity::Entity, event::Event, query::QueryEntityError};
+use bevy_ecs::{component::Component, entity::Entity, event::Event};
 use quinn_proto::{
     ConnectError, ConnectionError, ReadError, RetryError, SendDatagramError, WriteError,
 };
@@ -18,12 +18,14 @@ mod socket;
 #[derive(Debug, Component)]
 pub struct KeepAlive;
 
+/// Event raised whenever a library error occurs that pertains to a particular entity
 #[derive(Debug, Event)]
 pub struct EntityError {
     pub entity: Entity,
     pub error: Error,
 }
 
+/// Opaque library error type
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct Error(ErrorKind);
@@ -41,8 +43,8 @@ where
 pub(crate) enum ErrorKind {
     #[error("The stream was finished unexpectedly")]
     StreamFinished,
-    #[error(transparent)]
-    QueryEntity(#[from] QueryEntityError),
+    #[error("Expected entity to have a component of type {0}, but it does not")]
+    MissingComponent(&'static str),
     #[error(transparent)]
     Retry(#[from] RetryError),
     #[error(transparent)]
@@ -61,4 +63,10 @@ pub(crate) enum ErrorKind {
     Rustls(#[from] rustls::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+}
+
+impl ErrorKind {
+    pub(crate) fn missing_component<T>() -> Self {
+        Self::MissingComponent(std::any::type_name::<T>())
+    }
 }

@@ -6,8 +6,8 @@ use std::{
 use bevy_ecs::{
     component::Component,
     entity::Entity,
-    event::{Event, EventWriter},
-    query::{Added, Has, QueryState, With},
+    event::{Event, EventReader, EventWriter},
+    query::{Added, QueryState},
     system::{Query, SystemState},
     world::World,
 };
@@ -16,33 +16,77 @@ use quinn_proto::ServerConfig;
 use crate::{
     connection::{ConnectionBundle, ConnectionImpl},
     endpoint::Endpoint,
-    EntityError, KeepAlive,
+    EntityError, ErrorKind, KeepAlive,
 };
 
-/// Event raised whenever an endpoint receives a new incoming client connection
+/// Event raised whenever an endpoint receives a new incoming client connection.
+/// The specified entity will have an [`Incoming`] component
 #[derive(Debug, Event)]
 pub struct NewIncoming(pub Entity);
 
-/// How to respond to an incoming client connection
-///
-/// # Usage
-/// Insert this component onto an entity that has an [`Incoming`] component. If the response results in the connection being
-/// accepted, the `Incoming` and `IncomingResponse` components will be removed from the entity, and a [`Connection`] component
-/// will be added. Otherwise, the entity will be despawned.
-#[derive(Debug, Component)]
-pub enum IncomingResponse {
-    /// Attempt to accept this incoming connection (an error may still occur).
-    Accept,
-    /// Attempt to accept this incoming connection, using a custom configuration
-    AcceptWith(Arc<ServerConfig>),
-    /// Reject this incoming connection.
+#[derive(Debug, Clone, Component)]
+enum IncomingResponseType {
+    Accept(Option<Arc<ServerConfig>>),
     Refuse,
-    /// Respond with a retry packet, requiring the client to retry with address validationz
-    ///
-    /// Errors if [`Incoming::remote_address_validated()`] is true
     Retry,
-    /// Ignore this incoming connection attempt, not sending any packet in response
     Ignore,
+}
+
+/// How to respond to an incoming client connection.
+///
+/// Errors if the specified entity does not have an [`Incoming`] component
+#[derive(Debug, Clone, Event)]
+pub struct IncomingResponse {
+    entity: Entity,
+    response: IncomingResponseType,
+}
+
+impl IncomingResponse {
+    /// Attempt to accept this incoming connection. If no errors occur, the [`Incoming`] component on the specified entity will
+    /// be replaced with a [`Connecting`] component
+    pub fn accept(entity: Entity) -> Self {
+        Self {
+            entity,
+            response: IncomingResponseType::Accept(None),
+        }
+    }
+
+    /// Attempt to accept this incoming connection, using a custom configuration.
+    /// If no errors occur, the [`Incoming`] component on the specified entity will be replaced with a [`Connecting`] component
+    pub fn accept_with(entity: Entity, config: Arc<ServerConfig>) -> Self {
+        Self {
+            entity,
+            response: IncomingResponseType::Accept(Some(config)),
+        }
+    }
+
+    /// Reject this incoming connection. The specified entity will be despawned, unless it has a [`KeepAlive`] component
+    pub fn refuse(entity: Entity) -> Self {
+        Self {
+            entity,
+            response: IncomingResponseType::Refuse,
+        }
+    }
+
+    /// Respond with a retry packet, requiring the client to retry with address validation.
+    ///
+    /// Errors if [`Incoming::remote_address_validated()`] is true,
+    /// otherwise despawns the specified entity, unless it has a [`KeepAlive`] component
+    pub fn retry(entity: Entity) -> Self {
+        Self {
+            entity,
+            response: IncomingResponseType::Retry,
+        }
+    }
+
+    /// Ignore this incoming connection attempt, not sending any packet in response.
+    /// The specified entity will be despawned, unless it has a [`KeepAlive`] component
+    pub fn ignore(entity: Entity) -> Self {
+        Self {
+            entity,
+            response: IncomingResponseType::Ignore,
+        }
+    }
 }
 
 /// A new incoming connection from a client
@@ -102,32 +146,40 @@ pub(crate) fn send_new_incoming_events(
 pub(crate) fn handle_incoming_responses(
     world: &mut World,
     endpoints: &mut QueryState<Endpoint>,
-    incomings: &mut QueryState<(Entity, Has<KeepAlive>), (With<Incoming>, Added<IncomingResponse>)>,
+    response_events: &mut SystemState<EventReader<IncomingResponse>>,
     error_events: &mut SystemState<EventWriter<EntityError>>,
 ) {
-    let incomings = incomings.iter(world).collect::<Vec<_>>();
-    for (incoming_entity, keepalive) in incomings {
-        let mut incoming_entity = world.entity_mut(incoming_entity);
-        let (incoming, response) = incoming_entity
-            .take::<(Incoming, IncomingResponse)>()
-            .unwrap();
+    let responses = response_events
+        .get_mut(world)
+        .read()
+        .cloned()
+        .collect::<Vec<_>>();
+
+    for response in responses {
+        let mut incoming_entity = world.entity_mut(response.entity);
+        let incoming_entity_id = incoming_entity.id();
+
+        let Some(incoming) = incoming_entity.take::<Incoming>() else {
+            error_events.get_mut(world).send(EntityError {
+                entity: incoming_entity_id,
+                error: ErrorKind::missing_component::<Incoming>().into(),
+            });
+            continue;
+        };
 
         let endpoint_entity = incoming.endpoint_entity;
         let incoming = incoming.incoming;
 
         let result = incoming_entity.world_scope(|world| {
             let mut endpoint = endpoints.get_mut(world, endpoint_entity).unwrap();
-            match response {
-                IncomingResponse::Accept => endpoint.accept(incoming, None).map(Some),
-                IncomingResponse::AcceptWith(config) => {
-                    endpoint.accept(incoming, Some(config)).map(Some)
-                }
-                IncomingResponse::Refuse => {
+            match response.response {
+                IncomingResponseType::Accept(config) => endpoint.accept(incoming, config).map(Some),
+                IncomingResponseType::Refuse => {
                     endpoint.refuse(incoming);
                     Ok(None)
                 }
-                IncomingResponse::Retry => endpoint.retry(incoming).map(|_| None),
-                IncomingResponse::Ignore => {
+                IncomingResponseType::Retry => endpoint.retry(incoming).map(|_| None),
+                IncomingResponseType::Ignore => {
                     endpoint.ignore(incoming);
                     Ok(None)
                 }
@@ -143,15 +195,13 @@ pub(crate) fn handle_incoming_responses(
                 )));
             }
             Ok(None) => {
-                if !keepalive {
+                if !incoming_entity.contains::<KeepAlive>() {
                     incoming_entity.despawn()
                 }
             }
             Err(error) => {
-                let incoming_entity = incoming_entity.id();
-                let mut error_events = error_events.get_mut(world);
-                error_events.send(EntityError {
-                    entity: incoming_entity,
+                error_events.get_mut(world).send(EntityError {
+                    entity: incoming_entity_id,
                     error,
                 });
             }
