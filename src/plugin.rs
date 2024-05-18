@@ -7,9 +7,9 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct QuinnPlugin;
+pub struct QuicPlugin;
 
-impl Plugin for QuinnPlugin {
+impl Plugin for QuicPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,

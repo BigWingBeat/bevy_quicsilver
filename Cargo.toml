@@ -1,10 +1,10 @@
 [package]
-name = "bevy_quinntegration"
+name = "bevy_quicsilver"
 version = "0.1.0"
 authors = ["Pixelstorm"]
 edition = "2021"
-description = "Integrates quinn_proto with bevy_ecs"
-repository = "https://github.com/Pixelstormer/bevy_quinntegration"
+description = "Implementation of the QUIC transport protocol for bevy_ecs, using quinn_proto"
+repository = "https://github.com/Pixelstormer/bevy_quicsilver"
 license = "Apache-2.0"
 keywords = ["bevy", "quic", "gamedev", "networking"]
 categories = ["game-development", "network-programming"]
