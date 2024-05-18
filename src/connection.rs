@@ -442,12 +442,12 @@ impl ConnectionImpl {
         self.connection
             .datagrams()
             .send(data, false)
-            .or_else(|e| match e {
+            .or_else(|error| match error {
                 SendDatagramError::Blocked(data) => {
                     self.pending_datagrams.push(data);
                     Ok(())
                 }
-                _ => Err(e.into()),
+                _ => Err(error.into()),
             })
     }
 
@@ -560,6 +560,15 @@ impl ConnectionImpl {
     //     Ok(())
     // }
 
+    fn flush_pending_datagrams(&mut self) {
+        self.pending_datagrams.retain(|datagram| {
+            matches!(
+                self.connection.datagrams().send(datagram.clone(), false),
+                Err(SendDatagramError::Blocked(_))
+            )
+        });
+    }
+
     fn flush_pending_writes(&mut self) {
         let mut streams = self.connection.streams();
 
@@ -641,8 +650,8 @@ impl ConnectionImpl {
         std::iter::from_fn(|| self.connection.poll_endpoint_events())
     }
 
-    fn poll(&mut self) -> impl Iterator<Item = Event> + '_ {
-        std::iter::from_fn(|| self.connection.poll())
+    fn poll(&mut self) -> Option<Event> {
+        self.connection.poll()
     }
 }
 
@@ -744,7 +753,7 @@ pub(crate) fn poll_connections(
                 .collect::<Vec<_>>();
 
             // #4: poll
-            for event in connection.poll() {
+            while let Some(event) = connection.poll() {
                 match event {
                     Event::HandshakeDataReady => {
                         handshake_events.send(HandshakeDataReady(entity));
@@ -764,8 +773,8 @@ pub(crate) fn poll_connections(
                     Event::Stream(StreamEvent::Finished { id }) => {}
                     Event::Stream(StreamEvent::Stopped { id, error_code }) => todo!(),
                     Event::Stream(StreamEvent::Available { dir }) => todo!(),
-                    Event::DatagramReceived => todo!(),
-                    Event::DatagramsUnblocked => todo!(),
+                    Event::DatagramReceived => {}
+                    Event::DatagramsUnblocked => connection.flush_pending_datagrams(),
                 }
             }
 
