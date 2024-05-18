@@ -372,6 +372,7 @@ impl ConnectionImpl {
     }
 
     fn send_datagram(&mut self, data: Bytes) -> Result<(), Error> {
+        self.should_poll = true;
         self.connection
             .datagrams()
             .send(data, true)
@@ -379,6 +380,7 @@ impl ConnectionImpl {
     }
 
     fn send_datagram_wait(&mut self, data: Bytes) -> Result<(), Error> {
+        self.should_poll = true;
         self.connection
             .datagrams()
             .send(data, false)
@@ -392,6 +394,7 @@ impl ConnectionImpl {
     }
 
     fn read_datagram(&mut self) -> Option<Bytes> {
+        self.should_poll = true;
         self.connection.datagrams().recv()
     }
 
@@ -443,11 +446,13 @@ impl ConnectionImpl {
     }
 
     fn set_max_concurrent_uni_streams(&mut self, count: VarInt) {
-        self.connection.set_max_concurrent_streams(Dir::Uni, count)
+        self.connection.set_max_concurrent_streams(Dir::Uni, count);
+        self.should_poll = true;
     }
 
     fn set_max_concurrent_bi_streams(&mut self, count: VarInt) {
-        self.connection.set_max_concurrent_streams(Dir::Bi, count)
+        self.connection.set_max_concurrent_streams(Dir::Bi, count);
+        self.should_poll = true;
     }
 
     /// Serialize the given packet and send it over the network
@@ -613,6 +618,8 @@ pub(crate) fn poll_connections(
         let connection_handle = connection.handle;
         let max_datagrams = endpoint.max_gso_segments();
 
+        let mut transmit_blocked = false;
+
         while connection.should_poll {
             connection.should_poll = false;
 
@@ -625,6 +632,7 @@ pub(crate) fn poll_connections(
                     Ok(()) => {}
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         connection.blocked_transmit = Some(transmit);
+                        transmit_blocked = true;
                         break;
                     }
                     Err(e) => todo!(),
@@ -668,6 +676,12 @@ pub(crate) fn poll_connections(
             for event in events {
                 connection.handle_event(event);
             }
+        }
+
+        // If we need to wait a bit for the socket to become unblocked,
+        // queue the connection to be polled again the next time this system runs
+        if transmit_blocked {
+            connection.should_poll = true;
         }
     }
 }
