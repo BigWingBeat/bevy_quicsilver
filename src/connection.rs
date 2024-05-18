@@ -3,7 +3,7 @@ use bevy_ecs::{
     component::Component,
     entity::{Entity, EntityHash},
     event::EventWriter,
-    query::{Added, QueryData},
+    query::{Added, Has, QueryData, QueryEntityError},
     system::{Commands, Query, Res},
 };
 use bevy_time::{Real, Time, Timer, TimerMode};
@@ -14,7 +14,7 @@ use quinn_proto::{
     SendDatagramError, StreamEvent, StreamId, Transmit, VarInt,
 };
 
-use crate::{endpoint::Endpoint, Error};
+use crate::{endpoint::Endpoint, EntityError, Error, KeepAlive};
 
 use std::{
     any::Any,
@@ -112,6 +112,37 @@ pub struct Connection {
 }
 
 impl ConnectionItem<'_> {
+    /// Whether the connection is closed.
+    ///
+    /// Closed connections cannot transport any further data. A connection becomes closed when
+    /// either peer application intentionally closes it, or when either transport layer detects an
+    /// error such as a time-out or certificate validation failure.
+    ///
+    /// When the connection becomes closed, an [`EntityError`] event is emitted, and after a brief timeout,
+    /// the entity is despawned. If the entity has a [`KeepAlive`] component, only the connection component is removed instead
+    pub fn is_closed(&self) -> bool {
+        self.connection.is_closed()
+    }
+
+    /// Close the connection immediately.
+    ///
+    /// Pending operations will fail immediately with [`ConnectionError::LocallyClosed`]. Delivery
+    /// of data on unfinished streams is not guaranteed, so the application must call this only
+    /// when all important communications have been completed, e.g. by calling [`finish`] on
+    /// outstanding [`SendStream`]s and waiting for the resulting futures to complete.
+    ///
+    /// `error_code` and `reason` are not interpreted, and are provided directly to the peer.
+    ///
+    /// `reason` will be truncated to fit in a single packet with overhead; to improve odds that it
+    /// is preserved in full, it should be kept under 1KiB.
+    ///
+    /// [`ConnectionError::LocallyClosed`]: crate::ConnectionError::LocallyClosed
+    /// [`finish`]: crate::SendStream::finish
+    /// [`SendStream`]: crate::SendStream
+    pub fn close(&mut self, error_code: VarInt, reason: Bytes) {
+        self.connection.close(Instant::now(), error_code, reason)
+    }
+
     /// Transmit `data` as an unreliable, unordered application datagram
     ///
     /// Application datagrams are a low-level primitive. They may be lost or delivered out of order,
@@ -257,6 +288,18 @@ impl ConnectionItem<'_> {
 }
 
 impl ConnectionReadOnlyItem<'_> {
+    /// Whether the connection is closed.
+    ///
+    /// Closed connections cannot transport any further data. A connection becomes closed when
+    /// either peer application intentionally closes it, or when either transport layer detects an
+    /// error such as a time-out or certificate validation failure.
+    ///
+    /// When the connection becomes closed, an [`EntityError`] event is emitted, and after a brief timeout,
+    /// the entity is despawned. If the entity has a [`KeepAlive`] component, only the connection component is removed instead
+    pub fn is_closed(&self) -> bool {
+        self.connection.is_closed()
+    }
+
     /// The peer's UDP address
     ///
     /// If [`ServerConfig::migration()`] is `true`, clients may change addresses at will, e.g. when
@@ -344,6 +387,7 @@ pub(crate) struct ConnectionImpl {
     connection: quinn_proto::Connection,
     timeout_timer: Option<(Timer, Instant)>,
     should_poll: bool,
+    io_error: bool,
     blocked_transmit: Option<Transmit>,
     transmit_buf: Vec<u8>,
     pending_streams: Vec<Bytes>,
@@ -363,12 +407,26 @@ impl ConnectionImpl {
             connection,
             timeout_timer: None,
             should_poll: false,
+            io_error: false,
             blocked_transmit: None,
             transmit_buf: Vec::new(),
             pending_streams: Vec::new(),
             pending_writes: HashMap::default(),
             pending_datagrams: Vec::new(),
         }
+    }
+
+    fn is_drained(&self) -> bool {
+        self.connection.is_drained()
+    }
+
+    fn is_closed(&self) -> bool {
+        self.connection.is_closed()
+    }
+
+    fn close(&mut self, now: Instant, error_code: VarInt, reason: Bytes) {
+        self.connection.close(now, error_code, reason);
+        self.should_poll = true;
     }
 
     fn send_datagram(&mut self, data: Bytes) -> Result<(), Error> {
@@ -602,16 +660,40 @@ pub(crate) fn send_connection_established_events(
 /// Based on https://github.com/quinn-rs/quinn/blob/0.11.1/quinn/src/connection.rs#L231
 pub(crate) fn poll_connections(
     mut commands: Commands,
-    mut query: Query<(Entity, &mut ConnectionImpl)>,
+    mut query: Query<(Entity, &mut ConnectionImpl, Has<KeepAlive>)>,
     mut endpoint: Query<Endpoint>,
     mut handshake_events: EventWriter<HandshakeDataReady>,
+    mut error_events: EventWriter<EntityError>,
     time: Res<Time<Real>>,
 ) {
     let now = Instant::now();
-    for (entity, mut connection) in query.iter_mut() {
-        let mut endpoint = endpoint
-            .get_mut(connection.endpoint)
-            .expect("Endpoint entity was despawned");
+    for (entity, mut connection, keepalive) in query.iter_mut() {
+        if connection.is_drained() {
+            if keepalive {
+                commands
+                    .entity(entity)
+                    .remove::<(ConnectionImpl, StillConnecting, FullyConnected)>();
+            } else {
+                commands.entity(entity).despawn();
+            }
+        }
+
+        let mut endpoint = match endpoint.get_mut(connection.endpoint) {
+            Ok(endpoint) => endpoint,
+            Err(QueryEntityError::QueryDoesNotMatch(_))
+            | Err(QueryEntityError::NoSuchEntity(_)) => {
+                // If the endpoint does not exist anymore, neither should we
+                if keepalive {
+                    commands
+                        .entity(entity)
+                        .remove::<(ConnectionImpl, StillConnecting, FullyConnected)>();
+                } else {
+                    commands.entity(entity).despawn();
+                }
+                continue;
+            }
+            Err(QueryEntityError::AliasedMutability(_)) => unreachable!(),
+        };
 
         connection.handle_timeout(now, time.delta());
 
@@ -627,15 +709,28 @@ pub(crate) fn poll_connections(
             // (See https://docs.rs/quinn-proto/latest/quinn_proto/struct.Connection.html)
 
             // #1: poll_transmit
+            let mut io_error = connection.io_error;
             while let Some((transmit, data)) = connection.poll_transmit(now, max_datagrams) {
+                if io_error {
+                    // In case of an I/O error we want to continue polling the connection so it can close and drain gracefully,
+                    // but also stop using the socket, so we continue running as normal, except eating any transmits
+                    continue;
+                }
+
                 match endpoint.send(&transmit, data) {
                     Ok(()) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         connection.blocked_transmit = Some(transmit);
                         transmit_blocked = true;
                         break;
                     }
-                    Err(e) => todo!(),
+                    Err(error) => {
+                        // I/O error
+                        error_events.send(EntityError::new(entity, error));
+                        connection.close(now, 0u32.into(), "I/O error".into());
+                        connection.io_error = true;
+                        io_error = true;
+                    }
                 }
             }
 
@@ -660,7 +755,9 @@ pub(crate) fn poll_connections(
                             .remove::<StillConnecting>()
                             .insert(FullyConnected);
                     }
-                    Event::ConnectionLost { reason } => todo!(),
+                    Event::ConnectionLost { reason } => {
+                        error_events.send(EntityError::new(entity, reason));
+                    }
                     Event::Stream(StreamEvent::Opened { dir }) => todo!(),
                     Event::Stream(StreamEvent::Readable { id }) => todo!(),
                     Event::Stream(StreamEvent::Writable { id }) => todo!(),
