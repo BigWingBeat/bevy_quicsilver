@@ -79,20 +79,13 @@ impl ConnectingItem<'_> {
         self.connection.remote_address()
     }
 
-    /// The local IP address which was used when the peer established the connection
+    /// The local IP address which was used when the peer established the connection.
     ///
     /// This can be different from the address the endpoint is bound to, in case
     /// the endpoint is bound to a wildcard address like `0.0.0.0` or `::`.
     ///
-    /// This will return `None` for clients.
-    ///
-    /// Retrieving the local IP address is currently supported on the following
-    /// platforms:
-    /// - Linux
-    /// - ???, see https://github.com/quinn-rs/quinn/issues/1864
-    ///
-    /// On all non-supported platforms the local IP address will not be available,
-    /// and the method will return `None`.
+    /// This will return `None` for clients, or when the platform does not expose this
+    /// information. See [`quinn_udp::RecvMeta::dst_ip`] for a list of supported platforms
     pub fn local_ip(&self) -> Option<IpAddr> {
         self.connection.local_ip()
     }

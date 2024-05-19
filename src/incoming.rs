@@ -113,9 +113,13 @@ pub struct Incoming {
 }
 
 impl Incoming {
-    /// The local IP address which was used when the peer established the connection
+    /// The local IP address which was used when the peer established the connection.
     ///
-    /// See [`Connection::local_ip()`] for details
+    /// This can be different from the address the endpoint is bound to, in case
+    /// the endpoint is bound to a wildcard address like `0.0.0.0` or `::`.
+    ///
+    /// This will return `None` for clients, or when the platform does not expose this
+    /// information. See [`quinn_udp::RecvMeta::dst_ip`] for a list of supported platforms
     pub fn local_ip(&self) -> Option<IpAddr> {
         self.incoming.local_ip()
     }
