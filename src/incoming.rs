@@ -24,7 +24,7 @@ use crate::{
 #[derive(Debug, Event)]
 pub struct NewIncoming(pub Entity);
 
-#[derive(Debug, Clone, Component)]
+#[derive(Debug, Clone)]
 enum IncomingResponseType {
     Accept(Option<Arc<ServerConfig>>),
     Refuse,
@@ -166,7 +166,13 @@ pub(crate) fn handle_incoming_responses(
         .collect::<Vec<_>>();
 
     for response in responses {
-        let mut incoming_entity = world.entity_mut(response.entity);
+        let Some(mut incoming_entity) = world.get_entity_mut(response.entity) else {
+            error_events
+                .get_mut(world)
+                .send(EntityError::new(response.entity, ErrorKind::NoSuchEntity));
+            continue;
+        };
+
         let incoming_entity_id = incoming_entity.id();
 
         let Some(incoming) = incoming_entity.take::<Incoming>() else {
@@ -189,7 +195,9 @@ pub(crate) fn handle_incoming_responses(
             };
 
             match response.response {
-                IncomingResponseType::Accept(config) => endpoint.accept(incoming, config).map(Some),
+                IncomingResponseType::Accept(config) => endpoint
+                    .accept(incoming, incoming_entity_id, config)
+                    .map(Some),
                 IncomingResponseType::Refuse => {
                     endpoint.refuse(incoming);
                     Ok(None)

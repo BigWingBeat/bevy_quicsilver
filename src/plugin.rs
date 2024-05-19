@@ -1,8 +1,9 @@
 use bevy_app::{App, Plugin, Update};
+use bevy_ecs::schedule::{apply_deferred, IntoSystemConfigs};
 
 use crate::{
     connection::{poll_connections, send_connection_established_events},
-    endpoint::{find_new_connections, poll_endpoints},
+    endpoint::poll_endpoints,
     incoming::{handle_incoming_responses, send_new_incoming_events},
 };
 
@@ -13,14 +14,20 @@ impl Plugin for QuicPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (
-                find_new_connections,
-                poll_endpoints,
-                poll_connections,
-                handle_incoming_responses,
-                send_new_incoming_events,
-                send_connection_established_events,
-            ),
+            ((
+                handle_incoming_responses, // Adds connections to entities
+                apply_deferred,
+                (
+                    poll_endpoints, // Needs to see connections on entities, and adds Incomings to entities
+                    poll_connections, // Needs to see connections on entities, and signals connection established
+                ),
+                apply_deferred,
+                (
+                    send_new_incoming_events,           // Needs to see Incomings on entities
+                    send_connection_established_events, // Needs to see connection established signals
+                ),
+            )
+                .chain(),),
         );
     }
 }

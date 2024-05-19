@@ -54,6 +54,8 @@ pub(crate) enum ErrorKind {
     StreamFinished,
     #[error("Expected entity to have a component of type {0}, but it does not")]
     MissingComponent(&'static str),
+    #[error("The entity does not exist")]
+    NoSuchEntity,
     #[error(transparent)]
     Retry(#[from] RetryError),
     #[error(transparent)]

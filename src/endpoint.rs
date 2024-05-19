@@ -5,7 +5,7 @@ use bevy_ecs::{
     component::Component,
     entity::{Entity, EntityHash},
     event::EventWriter,
-    query::{Added, QueryData},
+    query::{QueryData, QueryEntityError},
     system::{Commands, Query},
 };
 use hashbrown::HashMap;
@@ -18,7 +18,7 @@ use crate::{
     connection::{ConnectionBundle, ConnectionImpl},
     incoming::Incoming,
     socket::UdpSocket,
-    EntityError, Error,
+    EntityError, Error, ErrorKind,
 };
 
 /// A bundle for adding an [`Endpoint`] to an entity
@@ -169,9 +169,11 @@ impl EndpointItem<'_> {
     pub(crate) fn accept(
         &mut self,
         incoming: quinn_proto::Incoming,
+        incoming_entity: Entity,
         server_config: Option<Arc<ServerConfig>>,
     ) -> Result<(ConnectionHandle, quinn_proto::Connection), Error> {
-        self.endpoint.accept(incoming, server_config)
+        self.endpoint
+            .accept(incoming, incoming_entity, server_config)
     }
 
     pub(crate) fn refuse(&mut self, incoming: quinn_proto::Incoming) {
@@ -368,6 +370,7 @@ impl EndpointImpl {
     fn accept(
         &mut self,
         incoming: quinn_proto::Incoming,
+        incoming_entity: Entity,
         server_config: Option<Arc<ServerConfig>>,
     ) -> Result<(ConnectionHandle, quinn_proto::Connection), Error> {
         let mut response_buffer = Vec::new();
@@ -378,6 +381,9 @@ impl EndpointImpl {
                 &mut response_buffer,
                 server_config,
             )
+            .inspect(|(handle, _)| {
+                self.connections.insert(*handle, incoming_entity);
+            })
             .map_err(|AcceptError { cause, response }| {
                 if let Some(response) = response {
                     self.send_response(&response, &response_buffer);
@@ -443,22 +449,6 @@ impl EndpointImpl {
     }
 }
 
-pub(crate) fn find_new_connections(
-    new_connections: Query<(Entity, &ConnectionImpl), Added<ConnectionImpl>>,
-    mut endpoints: Query<Endpoint>,
-) {
-    for (entity, connection) in new_connections.iter() {
-        let mut endpoint = endpoints
-            .get_mut(connection.endpoint)
-            .expect("Endpoint entity has gone missing");
-
-        endpoint
-            .endpoint
-            .connections
-            .insert(connection.handle, entity);
-    }
-}
-
 pub(crate) fn poll_endpoints(
     mut commands: Commands,
     mut endpoint_query: Query<Endpoint>,
@@ -491,12 +481,25 @@ pub(crate) fn poll_endpoints(
                 &mut response_buffer,
             ) {
                 Some(DatagramEvent::ConnectionEvent(handle, event)) => {
-                    let mut connection = connections
+                    let &connection_entity = connections
                         .get(&handle)
-                        .and_then(|&entity| connection_query.get_mut(entity).ok())
-                        .expect("Got event for unknown connection");
+                        .expect("ConnectionHandle {handle} is missing Entity mapping");
 
-                    connection.handle_event(event);
+                    match connection_query.get_mut(connection_entity) {
+                        Ok(mut connection) => connection.handle_event(event),
+                        Err(QueryEntityError::QueryDoesNotMatch(entity)) => {
+                            endpoint.handle_event(handle, EndpointEvent::drained());
+                            error_events.send(EntityError::new(
+                                entity,
+                                ErrorKind::missing_component::<ConnectionImpl>(),
+                            ));
+                        }
+                        Err(QueryEntityError::NoSuchEntity(entity)) => {
+                            endpoint.handle_event(handle, EndpointEvent::drained());
+                            error_events.send(EntityError::new(entity, ErrorKind::NoSuchEntity));
+                        }
+                        Err(QueryEntityError::AliasedMutability(_)) => unreachable!(),
+                    }
                 }
                 Some(DatagramEvent::NewConnection(incoming)) => {
                     commands.spawn(Incoming {
