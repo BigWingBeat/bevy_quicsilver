@@ -11,7 +11,7 @@ use rustls::{
 pub struct NoServerVerification(WebPkiSupportedAlgorithms);
 
 impl NoServerVerification {
-    fn new(algorithms: WebPkiSupportedAlgorithms) -> Self {
+    pub fn new(algorithms: WebPkiSupportedAlgorithms) -> Self {
         Self(algorithms)
     }
 }
@@ -98,7 +98,7 @@ pub mod server {
     /// `subject_alt_names` must include the exact value(s) that clients will specify as the `server_name` parameter of
     /// [`Endpoint::connect`] in order for the connection to succeed.
     ///
-    /// [`Endpoint::connect`]: https://docs.rs/quinn/latest/quinn/struct.Endpoint.html#method.connect
+    /// [`Endpoint::connect`]: crate::endpoint::EndpointItem::connect
     pub fn config_with_gen_self_signed(
         subject_alt_names: impl Into<Vec<String>>,
     ) -> Result<ServerConfig, Error> {
@@ -116,10 +116,11 @@ pub mod server {
     pub fn config_with_single_cert(
         cert_chain: Vec<CertificateDer<'static>>,
         key_der: PrivateKeyDer<'static>,
-    ) -> Result<ServerConfig, rustls::Error> {
+    ) -> Result<ServerConfig, Error> {
         ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
             .with_no_client_auth()
             .with_single_cert(cert_chain, key_der)
+            .map_err(Into::into)
     }
 
     /// Create a [`ServerConfig`] with a custom certificate resolver
