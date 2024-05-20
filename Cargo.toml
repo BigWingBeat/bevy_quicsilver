@@ -1,6 +1,6 @@
 [package]
 name = "bevy_quicsilver"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Pixelstorm"]
 edition = "2021"
 description = "Implementation of the QUIC transport protocol for bevy_ecs, using quinn_proto"
