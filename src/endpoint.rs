@@ -557,12 +557,7 @@ fn udp_transmit<'a>(transmit: &quinn_proto::Transmit, buffer: &'a [u8]) -> quinn
 #[cfg(test)]
 mod tests {
 
-    use std::{
-        net::{Ipv6Addr, SocketAddr, SocketAddrV6},
-        sync::Arc,
-        thread,
-        time::Duration,
-    };
+    use std::{net::Ipv6Addr, sync::Arc};
 
     use bevy_app::{App, PostUpdate};
     use bevy_ecs::event::{EventReader, Events};
@@ -634,7 +629,10 @@ mod tests {
 
         let client_connection = app.world.spawn(client_connection).id();
 
+        // Client connection sends packet to server
         app.update();
+
+        // Server reads packet from client and spawns an Incoming
         app.update();
 
         assert_eq!(app.world.resource::<Events<NewIncoming>>().len(), 1);
