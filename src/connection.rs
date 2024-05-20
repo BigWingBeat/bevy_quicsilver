@@ -399,7 +399,7 @@ impl ConnectionImpl {
             handle,
             connection,
             timeout_timer: None,
-            should_poll: false,
+            should_poll: true,
             io_error: false,
             blocked_transmit: None,
             transmit_buf: Vec::new(),

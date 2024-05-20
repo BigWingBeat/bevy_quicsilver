@@ -101,6 +101,9 @@ impl EndpointBundle {
 ///
 /// # Usage
 /// ```
+/// # use bevy_ecs::prelude::Query;
+/// # use bevy_quicsilver::Endpoint;
+///
 /// fn my_system(query: Query<Endpoint>) {
 ///     for endpoint in query.iter() {
 ///         println!("{}", endpoint.open_connections());
@@ -548,5 +551,92 @@ fn udp_transmit<'a>(transmit: &quinn_proto::Transmit, buffer: &'a [u8]) -> quinn
         contents: buffer,
         segment_size: transmit.segment_size,
         src_ip: transmit.src_ip,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use std::{
+        net::{Ipv6Addr, SocketAddr, SocketAddrV6},
+        sync::Arc,
+        thread,
+        time::Duration,
+    };
+
+    use bevy_app::{App, PostUpdate};
+    use bevy_ecs::event::{EventReader, Events};
+    use bevy_time::TimePlugin;
+    use quinn_proto::{ClientConfig, ServerConfig};
+    use rustls::pki_types::PrivateKeyDer;
+
+    use crate::{incoming::NewIncoming, plugin::QuicPlugin, EntityError};
+
+    use super::{Endpoint, EndpointBundle};
+
+    fn panic_on_error_event(mut errors: EventReader<EntityError>) {
+        if errors.is_empty() {
+            return;
+        }
+
+        let mut panic_string = format!("Encountered {} entity errors:", errors.len());
+        panic_string.extend(
+            errors
+                .read()
+                .map(|error| format!("\n    entity {:?}: {}", error.entity, error.error)),
+        );
+
+        panic!("{}", panic_string);
+    }
+
+    #[test]
+    fn test_new_connection() {
+        let mut app = App::new();
+
+        app.add_plugins((TimePlugin, QuicPlugin));
+
+        app.add_systems(PostUpdate, panic_on_error_event);
+
+        let key = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(key.cert.der().clone()).unwrap();
+
+        let client = EndpointBundle::new_client(
+            (Ipv6Addr::LOCALHOST, 0).into(),
+            Some(ClientConfig::with_root_certificates(Arc::new(roots)).unwrap()),
+        )
+        .unwrap();
+
+        let client = app.world.spawn(client).id();
+
+        let server = EndpointBundle::new_server(
+            (Ipv6Addr::LOCALHOST, 0).into(),
+            ServerConfig::with_single_cert(
+                vec![key.cert.der().clone()],
+                PrivateKeyDer::Pkcs8(key.key_pair.serialize_der().into()),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let server_addr = server.0.local_addr().unwrap();
+
+        let server = app.world.spawn(server).id();
+
+        let client_connection = app
+            .world
+            .query::<Endpoint>()
+            .get_mut(&mut app.world, client)
+            .unwrap()
+            .connect(server_addr, "localhost")
+            .unwrap();
+
+        let client_connection = app.world.spawn(client_connection).id();
+
+        app.update();
+        app.update();
+
+        assert_eq!(app.world.resource::<Events<NewIncoming>>().len(), 1);
     }
 }

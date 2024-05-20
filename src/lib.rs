@@ -6,6 +6,9 @@ use thiserror::Error;
 
 pub use quinn_proto::{ClientConfig, ServerConfig};
 
+pub use endpoint::Endpoint;
+pub use incoming::{Incoming, IncomingResponse, NewIncoming};
+
 pub mod connection;
 pub mod crypto;
 pub mod endpoint;

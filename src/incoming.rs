@@ -93,13 +93,16 @@ impl IncomingResponse {
 ///
 /// # Usage
 /// ```
+/// # use bevy_ecs::prelude::{Commands, Query, EventReader, EventWriter};
+/// # use bevy_quicsilver::{Incoming, NewIncoming, IncomingResponse};
+///
 /// fn my_system(
 ///     mut commands: Commands,
 ///     query: Query<&Incoming>,
-///     incomings: EventReader<NewIncoming>,
+///     mut incomings: EventReader<NewIncoming>,
 ///     mut responses: EventWriter<IncomingResponse>,
 /// ) {
-///     for NewIncoming(entity) in incomings.read() {
+///     for &NewIncoming(entity) in incomings.read() {
 ///         let incoming = query.get(entity).unwrap();
 ///         println!("New client connecting from {:?}", incoming.remote_address());
 ///         responses.send(IncomingResponse::accept(entity));
