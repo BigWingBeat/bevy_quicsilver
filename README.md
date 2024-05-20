@@ -18,3 +18,11 @@ That is not to say it is entirely barebones though, as a large part of the appea
 - Simultaneous client/server operation
 - IPv4 and IPv6 support
 - Cross-platform
+
+## Supported Bevy Versions
+
+- 0.13.*
+
+## Development Status
+
+This library is still very new and in active development. Although most of the core functionality is in place, it's not in a usable state yet.
