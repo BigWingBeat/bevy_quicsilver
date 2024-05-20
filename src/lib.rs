@@ -1,3 +1,5 @@
+#![doc(test(attr(deny(warnings))))]
+
 use bevy_ecs::{component::Component, entity::Entity, event::Event};
 use quinn_proto::{
     ConnectError, ConnectionError, ReadError, RetryError, SendDatagramError, WriteError,
@@ -8,6 +10,7 @@ pub use quinn_proto::{ClientConfig, ServerConfig};
 
 pub use endpoint::Endpoint;
 pub use incoming::{Incoming, IncomingResponse, NewIncoming};
+pub use plugin::QuicPlugin;
 
 pub mod connection;
 pub mod crypto;

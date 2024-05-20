@@ -101,8 +101,14 @@ impl EndpointBundle {
 ///
 /// # Usage
 /// ```
+/// # use bevy_app::{App, Update};
 /// # use bevy_ecs::prelude::Query;
-/// # use bevy_quicsilver::Endpoint;
+/// # use bevy_quicsilver::{QuicPlugin, Endpoint};
+///
+/// # let mut app = App::new();
+/// # app.add_plugins(QuicPlugin);
+/// # app.add_systems(Update, my_system);
+/// # app.update();
 ///
 /// fn my_system(query: Query<Endpoint>) {
 ///     for endpoint in query.iter() {
@@ -561,7 +567,6 @@ mod tests {
 
     use bevy_app::{App, PostUpdate};
     use bevy_ecs::event::{EventReader, Events};
-    use bevy_time::TimePlugin;
     use quinn_proto::{ClientConfig, ServerConfig};
     use rustls::pki_types::PrivateKeyDer;
 
@@ -588,7 +593,7 @@ mod tests {
     fn test_new_connection() {
         let mut app = App::new();
 
-        app.add_plugins((TimePlugin, QuicPlugin));
+        app.add_plugins(QuicPlugin);
 
         app.add_systems(PostUpdate, panic_on_error_event);
 

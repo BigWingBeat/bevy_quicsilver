@@ -93,11 +93,16 @@ impl IncomingResponse {
 ///
 /// # Usage
 /// ```
-/// # use bevy_ecs::prelude::{Commands, Query, EventReader, EventWriter};
-/// # use bevy_quicsilver::{Incoming, NewIncoming, IncomingResponse};
+/// # use bevy_app::{App, Update};
+/// # use bevy_ecs::prelude::{Query, EventReader, EventWriter};
+/// # use bevy_quicsilver::{QuicPlugin, Incoming, NewIncoming, IncomingResponse};
+///
+/// # let mut app = App::new();
+/// # app.add_plugins(QuicPlugin);
+/// # app.add_systems(Update, my_system);
+/// # app.update();
 ///
 /// fn my_system(
-///     mut commands: Commands,
 ///     query: Query<&Incoming>,
 ///     mut incomings: EventReader<NewIncoming>,
 ///     mut responses: EventWriter<IncomingResponse>,

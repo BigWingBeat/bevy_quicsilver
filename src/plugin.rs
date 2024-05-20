@@ -1,5 +1,6 @@
 use bevy_app::{App, Plugin, Update};
 use bevy_ecs::schedule::{apply_deferred, IntoSystemConfigs};
+use bevy_time::TimePlugin;
 
 use crate::{
     connection::{
@@ -16,6 +17,10 @@ pub struct QuicPlugin;
 
 impl Plugin for QuicPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<TimePlugin>() {
+            app.add_plugins(TimePlugin);
+        }
+
         app.add_event::<NewIncoming>()
             .add_event::<IncomingResponse>()
             .add_event::<EntityError>()
