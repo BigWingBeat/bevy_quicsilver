@@ -7,6 +7,14 @@ A networking plugin for using the [QUIC](https://quicwg.org/) transport layer pr
 
 This crate integrates the [`quinn_proto`](https://github.com/quinn-rs/quinn) library, a pure-rust implementation of QUIC, with the Bevy ECS, providing an idiomatic ecs-based API.
 
+## Development Status
+
+This library is still very new and in active development. Although most of the core functionality is in place, it's not in a usable state yet.
+
+## Supported Bevy Versions
+
+- `0.13.*`
+
 ## Features
 
 Ultimately, `bevy_quicsilver` doesn't offer anything more complicated than sending and receiving raw bytes. It is intended to be a foundation ontop of which other libraries implement higher-level features, by abstracting the complexity of the transport protocol behind an ecs-based API.
@@ -19,10 +27,3 @@ That is not to say it is entirely barebones though, as a large part of the appea
 - IPv4 and IPv6 support
 - Cross-platform
 
-## Supported Bevy Versions
-
-- 0.13.*
-
-## Development Status
-
-This library is still very new and in active development. Although most of the core functionality is in place, it's not in a usable state yet.
