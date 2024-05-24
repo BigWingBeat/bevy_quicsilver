@@ -577,10 +577,11 @@ mod tests {
 
     use bevy_app::{App, PostUpdate};
     use bevy_ecs::{
+        entity::Entity,
         event::{EventReader, Events},
         query::Without,
     };
-    use quinn_proto::{ClientConfig, ServerConfig};
+    use quinn_proto::{ClientConfig, EndpointConfig, ServerConfig};
     use rcgen::CertifiedKey;
     use rustls::{pki_types::PrivateKeyDer, RootCertStore};
 
@@ -634,94 +635,185 @@ mod tests {
         .unwrap()
     }
 
-    #[test]
-    fn test_new_connection() {
+    fn setup_app() -> App {
         let mut app = App::new();
-
         app.add_plugins(QuicPlugin);
-
         app.add_systems(PostUpdate, panic_on_error_event);
+        app
+    }
 
-        // Gen crypto for client and server to share
+    macro_rules! establish_connection {
+        ($client_app:ident, $server_app:ident, $client_endpoint_entity:ident, $server_endpoint_entity:ident) => {{
+            // Get the `SocketAddr` that the client should connect to
+            let server_addr = $server_app
+                .world
+                .query::<Endpoint>()
+                .get(&$server_app.world, $server_endpoint_entity)
+                .unwrap()
+                .local_addr()
+                .unwrap();
+
+            // Initiate connection from client to server
+            let client_connection = $client_app
+                .world
+                .query::<Endpoint>()
+                .get_mut(&mut $client_app.world, $client_endpoint_entity)
+                .unwrap()
+                .connect(server_addr, "localhost")
+                .unwrap();
+
+            // Spawn client-side connection
+            let client_connection = $client_app.world.spawn(client_connection).id();
+
+            // Client connection sends packet to server
+            $client_app.update();
+
+            let stats = $client_app
+                .world
+                .query::<Connecting>()
+                .get(&$client_app.world, client_connection)
+                .unwrap()
+                .stats();
+
+            assert_eq!(stats.udp_tx.datagrams, 1);
+            assert_eq!(stats.frame_tx.crypto, 1);
+            assert_eq!(stats.path.sent_packets, 1);
+
+            // Server reads packet from client and spawns an Incoming
+            $server_app.update();
+
+            let events = $server_app.world.resource::<Events<NewIncoming>>();
+            let mut reader = events.get_reader();
+            let mut events = reader.read(events);
+            let server_connection = events.next().unwrap().0;
+            assert!(events.next().is_none());
+
+            let incoming = $server_app
+                .world
+                .query::<&Incoming>()
+                .get(&$server_app.world, server_connection)
+                .unwrap();
+
+            assert_eq!(incoming.endpoint(), $server_endpoint_entity);
+
+            $server_app
+                .world
+                .resource_mut::<Events<IncomingResponse>>()
+                .send(IncomingResponse::accept(server_connection));
+
+            // Incoming is replaced with server-side connection, server sends packets to client
+            $server_app.update();
+
+            let stats = $server_app
+                .world
+                .query_filtered::<Connecting, Without<Incoming>>()
+                .get(&$server_app.world, server_connection)
+                .unwrap()
+                .stats();
+
+            assert_eq!(stats.frame_rx.crypto, 1);
+
+            // Wait for connection to become fully established
+            // TODO: for `two_endpoints_different_worlds`, why are so many updates needed
+            $client_app.update();
+            $server_app.update();
+            $client_app.update();
+            $server_app.update();
+            $client_app.update();
+            $server_app.update();
+
+            (client_connection, server_connection)
+        }};
+    }
+
+    macro_rules! send_datagrams {
+        ($client_app:ident, $server_app:ident, $client_connection_entity:ident, $server_connection_entity:ident) => {{
+            // Confirm that the connections can send data to each other
+            let mut client_connection = $client_app
+                .world
+                .query::<Connection>()
+                .get_mut(&mut $client_app.world, $client_connection_entity)
+                .expect("0");
+
+            client_connection
+                .send_datagram("datagram client -> server".into())
+                .expect("1");
+
+            let mut server_connection = $server_app
+                .world
+                .query::<Connection>()
+                .get_mut(&mut $server_app.world, $server_connection_entity)
+                .expect("2");
+
+            server_connection
+                .send_datagram("datagram server -> client".into())
+                .expect("3");
+
+            // Transmit buffered datagrams
+            $client_app.update();
+            $server_app.update();
+            $client_app.update();
+
+            let mut client_connection = $client_app
+                .world
+                .query::<Connection>()
+                .get_mut(&mut $client_app.world, $client_connection_entity)
+                .expect("4");
+
+            let datagram =
+                String::from_utf8(client_connection.read_datagram().expect("5").to_vec())
+                    .expect("6");
+            assert_eq!(datagram, "datagram server -> client");
+
+            let mut server_connection = $server_app
+                .world
+                .query::<Connection>()
+                .get_mut(&mut $server_app.world, $server_connection_entity)
+                .expect("7");
+
+            let datagram =
+                String::from_utf8(server_connection.read_datagram().expect("8").to_vec())
+                    .expect("9");
+            assert_eq!(datagram, "datagram client -> server");
+        }};
+    }
+
+    #[test]
+    fn one_endpoint() {
+        let mut app = setup_app();
+
+        let socket = std::net::UdpSocket::bind((Ipv6Addr::LOCALHOST, 0)).unwrap();
+
+        // Generate certificate for server to advertise and client to trust
         let key = generate_self_signed();
+        let mut roots = RootCertStore::empty();
+        roots.add(key.cert.der().clone()).unwrap();
 
-        // Spawn client endpoint
-        let client = client_endpoint(&key);
-        let client = app.world.spawn(client).id();
+        let endpoint = EndpointBundle::new(
+            socket,
+            EndpointConfig::default(),
+            Some(ClientConfig::with_root_certificates(Arc::new(roots)).unwrap()),
+            Some(
+                ServerConfig::with_single_cert(
+                    vec![key.cert.der().clone()],
+                    PrivateKeyDer::Pkcs8(key.key_pair.serialize_der().into()),
+                )
+                .unwrap(),
+            ),
+            None,
+        )
+        .unwrap();
 
-        // Spawn server endpoint
-        let server = server_endpoint(&key);
-        let server_addr = server.0.local_addr().unwrap();
-        let server = app.world.spawn(server).id();
+        let endpoint_entity = app.world.spawn(endpoint).id();
 
-        // Initiate connection from client to server
-        let client_connection = app
-            .world
-            .query::<Endpoint>()
-            .get_mut(&mut app.world, client)
-            .unwrap()
-            .connect(server_addr, "localhost")
-            .unwrap();
-
-        // Spawn client-side connection
-        let client_connection = app.world.spawn(client_connection).id();
-
-        // Client connection sends packet to server
-        app.update();
-
-        let stats = app
-            .world
-            .query::<Connecting>()
-            .get(&app.world, client_connection)
-            .unwrap()
-            .stats();
-
-        assert_eq!(stats.udp_tx.datagrams, 1);
-        assert_eq!(stats.frame_tx.crypto, 1);
-        assert_eq!(stats.path.sent_packets, 1);
-
-        // Server reads packet from client and spawns an Incoming
-        app.update();
-
-        let events = app.world.resource::<Events<NewIncoming>>();
-        let mut reader = events.get_reader();
-        let mut events = reader.read(events);
-        let server_connection = events.next().unwrap().0;
-        assert!(events.next().is_none());
-
-        let incoming = app
-            .world
-            .query::<&Incoming>()
-            .get(&app.world, server_connection)
-            .unwrap();
-
-        assert_eq!(incoming.endpoint(), server);
-
-        app.world
-            .resource_mut::<Events<IncomingResponse>>()
-            .send(IncomingResponse::accept(server_connection));
-
-        // Incoming is replaced with server-side connection, server sends packets to client
-        app.update();
-
-        let stats = app
-            .world
-            .query_filtered::<Connecting, Without<Incoming>>()
-            .get(&app.world, server_connection)
-            .unwrap()
-            .stats();
-
-        assert_eq!(stats.frame_rx.crypto, 1);
-
-        // Wait for connection to become fully established
-        app.update();
-        app.update();
+        let (client_connection, server_connection) =
+            establish_connection!(app, app, endpoint_entity, endpoint_entity);
 
         let events = app.world.resource::<Events<ConnectionEstablished>>();
         let mut reader = events.get_reader();
         let mut events = reader.read(events);
 
-        // One of these is for the client and the other for the server, but we don't know which way round they are
+        // One of these is for the client and the other is for the server, but we don't know which way round they are
         let conn_a = events.next().unwrap().0;
         let conn_b = events.next().unwrap().0;
         assert!(events.next().is_none());
@@ -730,45 +822,67 @@ mod tests {
                 || [conn_b, conn_a] == [client_connection, server_connection]
         );
 
-        let mut connection_a = app
-            .world
-            .query::<Connection>()
-            .get_mut(&mut app.world, conn_a)
-            .unwrap();
+        send_datagrams!(app, app, client_connection, server_connection);
+    }
 
-        connection_a
-            .send_datagram("datagram a -> b".into())
-            .unwrap();
+    #[test]
+    fn two_endpoints_same_world() {
+        let mut app = setup_app();
 
-        let mut connection_b = app
-            .world
-            .query::<Connection>()
-            .get_mut(&mut app.world, conn_b)
-            .unwrap();
+        // Generate certificate for server to advertise and client to trust
+        let key = generate_self_signed();
 
-        connection_b
-            .send_datagram("datagram b -> a".into())
-            .unwrap();
+        let client_endpoint = app.world.spawn(client_endpoint(&key)).id();
+        let server_endpoint = app.world.spawn(server_endpoint(&key)).id();
 
-        // Transmit buffered datagrams
-        app.update();
+        let (client_connection, server_connection) =
+            establish_connection!(app, app, client_endpoint, server_endpoint);
 
-        let mut connection_a = app
-            .world
-            .query::<Connection>()
-            .get_mut(&mut app.world, conn_a)
-            .unwrap();
+        let events = app.world.resource::<Events<ConnectionEstablished>>();
+        let mut reader = events.get_reader();
+        let mut events = reader.read(events);
 
-        let datagram = String::from_utf8(connection_a.read_datagram().unwrap().to_vec()).unwrap();
-        assert_eq!(datagram, "datagram b -> a");
+        // One of these is for the client and the other is for the server, but we don't know which way round they are
+        let conn_a = events.next().unwrap().0;
+        let conn_b = events.next().unwrap().0;
+        assert!(events.next().is_none());
+        assert!(
+            [conn_a, conn_b] == [client_connection, server_connection]
+                || [conn_b, conn_a] == [client_connection, server_connection]
+        );
 
-        let mut connection_b = app
-            .world
-            .query::<Connection>()
-            .get_mut(&mut app.world, conn_b)
-            .unwrap();
+        send_datagrams!(app, app, client_connection, server_connection);
+    }
 
-        let datagram = String::from_utf8(connection_b.read_datagram().unwrap().to_vec()).unwrap();
-        assert_eq!(datagram, "datagram a -> b");
+    #[test]
+    fn two_endpoints_different_worlds() {
+        let mut client_app = setup_app();
+        let mut server_app = setup_app();
+
+        // Generate certificate for server to advertise and client to trust
+        let key = generate_self_signed();
+
+        let client_endpoint = client_app.world.spawn(client_endpoint(&key)).id();
+        let server_endpoint = server_app.world.spawn(server_endpoint(&key)).id();
+
+        let (client_connection, server_connection) =
+            establish_connection!(client_app, server_app, client_endpoint, server_endpoint);
+
+        // Each app should have 1 connection established event
+        let events = client_app.world.resource::<Events<ConnectionEstablished>>();
+        let mut reader = events.get_reader();
+        let mut events = reader.read(events);
+        let connection_entity = events.next().unwrap().0;
+        assert!(events.next().is_none());
+        assert_eq!(connection_entity, client_connection);
+
+        let events = server_app.world.resource::<Events<ConnectionEstablished>>();
+        let mut reader = events.get_reader();
+        let mut events = reader.read(events);
+        let connection_entity = events.next().unwrap().0;
+        assert!(events.next().is_none());
+        assert_eq!(connection_entity, server_connection);
+
+        send_datagrams!(client_app, server_app, client_connection, server_connection);
     }
 }
