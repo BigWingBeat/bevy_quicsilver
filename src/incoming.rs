@@ -203,9 +203,7 @@ pub(crate) fn handle_incoming_responses(
             };
 
             match response.response {
-                IncomingResponseType::Accept(config) => endpoint
-                    .accept(incoming, incoming_entity_id, config)
-                    .map(Some),
+                IncomingResponseType::Accept(config) => endpoint.accept(incoming, config).map(Some),
                 IncomingResponseType::Refuse => {
                     endpoint.refuse(incoming);
                     Ok(None)

@@ -7,7 +7,7 @@ use crate::{
         poll_connections, send_connection_established_events, ConnectionEstablished,
         HandshakeDataReady,
     },
-    endpoint::poll_endpoints,
+    endpoint::{find_new_connections, poll_endpoints},
     incoming::{handle_incoming_responses, send_new_incoming_events},
     EntityError, IncomingResponse, NewIncoming,
 };
@@ -31,6 +31,7 @@ impl Plugin for QuicPlugin {
                 ((
                     handle_incoming_responses, // Adds connections to entities
                     apply_deferred,
+                    find_new_connections, // Adds ConnectionId -> Entity mappings for client connections
                     (
                         poll_endpoints, // Needs to see connections on entities, and adds Incomings to entities
                         poll_connections, // Needs to see connections on entities, and signals connection established

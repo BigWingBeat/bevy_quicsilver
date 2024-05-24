@@ -1,7 +1,7 @@
 use bevy_ecs::{
     bundle::Bundle,
     component::Component,
-    entity::{Entity, EntityHash},
+    entity::Entity,
     event::EventWriter,
     query::{Added, Has, QueryData, QueryEntityError},
     system::{Commands, Query, Res},
@@ -88,6 +88,11 @@ impl ConnectingItem<'_> {
     /// information. See [`quinn_udp::RecvMeta::dst_ip`] for a list of supported platforms
     pub fn local_ip(&self) -> Option<IpAddr> {
         self.connection.local_ip()
+    }
+
+    /// Returns connection statistics
+    pub fn stats(&self) -> ConnectionStats {
+        self.connection.stats()
     }
 }
 
@@ -384,7 +389,7 @@ pub(crate) struct ConnectionImpl {
     blocked_transmit: Option<Transmit>,
     transmit_buf: Vec<u8>,
     pending_streams: Vec<Bytes>,
-    pending_writes: HashMap<StreamId, Vec<Bytes>, EntityHash>,
+    pending_writes: HashMap<StreamId, Vec<Bytes>>,
     pending_datagrams: Vec<Bytes>,
 }
 

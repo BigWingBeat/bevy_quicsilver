@@ -3,9 +3,9 @@ use std::{net::SocketAddr, sync::Arc, time::Instant};
 use bevy_ecs::{
     bundle::Bundle,
     component::Component,
-    entity::{Entity, EntityHash},
+    entity::Entity,
     event::EventWriter,
-    query::{QueryData, QueryEntityError},
+    query::{Added, QueryData, QueryEntityError},
     system::{Commands, Query},
 };
 use hashbrown::HashMap;
@@ -178,11 +178,9 @@ impl EndpointItem<'_> {
     pub(crate) fn accept(
         &mut self,
         incoming: quinn_proto::Incoming,
-        incoming_entity: Entity,
         server_config: Option<Arc<ServerConfig>>,
     ) -> Result<(ConnectionHandle, quinn_proto::Connection), Error> {
-        self.endpoint
-            .accept(incoming, incoming_entity, server_config)
+        self.endpoint.accept(incoming, server_config)
     }
 
     pub(crate) fn refuse(&mut self, incoming: quinn_proto::Incoming) {
@@ -261,7 +259,7 @@ impl EndpointReadOnlyItem<'_> {
 struct EndpointImpl {
     endpoint: quinn_proto::Endpoint,
     default_client_config: Option<ClientConfig>,
-    connections: HashMap<ConnectionHandle, Entity, EntityHash>,
+    connections: HashMap<ConnectionHandle, Entity>,
     socket: UdpSocket,
 }
 
@@ -379,7 +377,6 @@ impl EndpointImpl {
     fn accept(
         &mut self,
         incoming: quinn_proto::Incoming,
-        incoming_entity: Entity,
         server_config: Option<Arc<ServerConfig>>,
     ) -> Result<(ConnectionHandle, quinn_proto::Connection), Error> {
         let mut response_buffer = Vec::new();
@@ -390,9 +387,6 @@ impl EndpointImpl {
                 &mut response_buffer,
                 server_config,
             )
-            .inspect(|(handle, _)| {
-                self.connections.insert(*handle, incoming_entity);
-            })
             .map_err(|AcceptError { cause, response }| {
                 if let Some(response) = response {
                     self.send_response(&response, &response_buffer);
@@ -458,6 +452,22 @@ impl EndpointImpl {
     }
 }
 
+/// Quinn refers to connections via [`ConnectionHandle`]s,
+/// which we have to map to [`Entity`]s in order to query the connections in question from the ECS
+pub(crate) fn find_new_connections(
+    new_connections: Query<(Entity, &ConnectionImpl), Added<ConnectionImpl>>,
+    mut endpoints: Query<Endpoint>,
+) {
+    for (entity, connection) in new_connections.iter() {
+        if let Ok(mut endpoint) = endpoints.get_mut(connection.endpoint) {
+            endpoint
+                .endpoint
+                .connections
+                .insert(connection.handle, entity);
+        }
+    }
+}
+
 pub(crate) fn poll_endpoints(
     mut commands: Commands,
     mut endpoint_query: Query<Endpoint>,
@@ -490,9 +500,9 @@ pub(crate) fn poll_endpoints(
                 &mut response_buffer,
             ) {
                 Some(DatagramEvent::ConnectionEvent(handle, event)) => {
-                    let &connection_entity = connections
-                        .get(&handle)
-                        .expect("ConnectionHandle {handle} is missing Entity mapping");
+                    let &connection_entity = connections.get(&handle).unwrap_or_else(|| {
+                        panic!("ConnectionHandle {handle:?} is missing Entity mapping")
+                    });
 
                     match connection_query.get_mut(connection_entity) {
                         Ok(mut connection) => connection.handle_event(event),
@@ -566,11 +576,20 @@ mod tests {
     use std::{net::Ipv6Addr, sync::Arc};
 
     use bevy_app::{App, PostUpdate};
-    use bevy_ecs::event::{EventReader, Events};
+    use bevy_ecs::{
+        event::{EventReader, Events},
+        query::Without,
+    };
     use quinn_proto::{ClientConfig, ServerConfig};
-    use rustls::pki_types::PrivateKeyDer;
+    use rcgen::CertifiedKey;
+    use rustls::{pki_types::PrivateKeyDer, RootCertStore};
 
-    use crate::{incoming::NewIncoming, plugin::QuicPlugin, EntityError};
+    use crate::{
+        connection::{Connecting, Connection, ConnectionEstablished},
+        incoming::NewIncoming,
+        plugin::QuicPlugin,
+        EntityError, Incoming, IncomingResponse,
+    };
 
     use super::{Endpoint, EndpointBundle};
 
@@ -589,6 +608,32 @@ mod tests {
         panic!("{}", panic_string);
     }
 
+    fn generate_self_signed() -> CertifiedKey {
+        rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap()
+    }
+
+    fn client_endpoint(key: &CertifiedKey) -> EndpointBundle {
+        let mut roots = RootCertStore::empty();
+        roots.add(key.cert.der().clone()).unwrap();
+        EndpointBundle::new_client(
+            (Ipv6Addr::LOCALHOST, 0).into(),
+            Some(ClientConfig::with_root_certificates(Arc::new(roots)).unwrap()),
+        )
+        .unwrap()
+    }
+
+    fn server_endpoint(key: &CertifiedKey) -> EndpointBundle {
+        EndpointBundle::new_server(
+            (Ipv6Addr::LOCALHOST, 0).into(),
+            ServerConfig::with_single_cert(
+                vec![key.cert.der().clone()],
+                PrivateKeyDer::Pkcs8(key.key_pair.serialize_der().into()),
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    }
+
     #[test]
     fn test_new_connection() {
         let mut app = App::new();
@@ -597,33 +642,19 @@ mod tests {
 
         app.add_systems(PostUpdate, panic_on_error_event);
 
-        let key = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        // Gen crypto for client and server to share
+        let key = generate_self_signed();
 
-        let mut roots = rustls::RootCertStore::empty();
-        roots.add(key.cert.der().clone()).unwrap();
-
-        let client = EndpointBundle::new_client(
-            (Ipv6Addr::LOCALHOST, 0).into(),
-            Some(ClientConfig::with_root_certificates(Arc::new(roots)).unwrap()),
-        )
-        .unwrap();
-
+        // Spawn client endpoint
+        let client = client_endpoint(&key);
         let client = app.world.spawn(client).id();
 
-        let server = EndpointBundle::new_server(
-            (Ipv6Addr::LOCALHOST, 0).into(),
-            ServerConfig::with_single_cert(
-                vec![key.cert.der().clone()],
-                PrivateKeyDer::Pkcs8(key.key_pair.serialize_der().into()),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-
+        // Spawn server endpoint
+        let server = server_endpoint(&key);
         let server_addr = server.0.local_addr().unwrap();
-
         let server = app.world.spawn(server).id();
 
+        // Initiate connection from client to server
         let client_connection = app
             .world
             .query::<Endpoint>()
@@ -632,14 +663,112 @@ mod tests {
             .connect(server_addr, "localhost")
             .unwrap();
 
+        // Spawn client-side connection
         let client_connection = app.world.spawn(client_connection).id();
 
         // Client connection sends packet to server
         app.update();
 
+        let stats = app
+            .world
+            .query::<Connecting>()
+            .get(&app.world, client_connection)
+            .unwrap()
+            .stats();
+
+        assert_eq!(stats.udp_tx.datagrams, 1);
+        assert_eq!(stats.frame_tx.crypto, 1);
+        assert_eq!(stats.path.sent_packets, 1);
+
         // Server reads packet from client and spawns an Incoming
         app.update();
 
-        assert_eq!(app.world.resource::<Events<NewIncoming>>().len(), 1);
+        let events = app.world.resource::<Events<NewIncoming>>();
+        let mut reader = events.get_reader();
+        let mut events = reader.read(events);
+        let server_connection = events.next().unwrap().0;
+        assert!(events.next().is_none());
+
+        let incoming = app
+            .world
+            .query::<&Incoming>()
+            .get(&app.world, server_connection)
+            .unwrap();
+
+        assert_eq!(incoming.endpoint(), server);
+
+        app.world
+            .resource_mut::<Events<IncomingResponse>>()
+            .send(IncomingResponse::accept(server_connection));
+
+        // Incoming is replaced with server-side connection, server sends packets to client
+        app.update();
+
+        let stats = app
+            .world
+            .query_filtered::<Connecting, Without<Incoming>>()
+            .get(&app.world, server_connection)
+            .unwrap()
+            .stats();
+
+        assert_eq!(stats.frame_rx.crypto, 1);
+
+        // Wait for connection to become fully established
+        app.update();
+        app.update();
+
+        let events = app.world.resource::<Events<ConnectionEstablished>>();
+        let mut reader = events.get_reader();
+        let mut events = reader.read(events);
+
+        // One of these is for the client and the other for the server, but we don't know which way round they are
+        let conn_a = events.next().unwrap().0;
+        let conn_b = events.next().unwrap().0;
+        assert!(events.next().is_none());
+        assert!(
+            [conn_a, conn_b] == [client_connection, server_connection]
+                || [conn_b, conn_a] == [client_connection, server_connection]
+        );
+
+        let mut connection_a = app
+            .world
+            .query::<Connection>()
+            .get_mut(&mut app.world, conn_a)
+            .unwrap();
+
+        connection_a
+            .send_datagram("datagram a -> b".into())
+            .unwrap();
+
+        let mut connection_b = app
+            .world
+            .query::<Connection>()
+            .get_mut(&mut app.world, conn_b)
+            .unwrap();
+
+        connection_b
+            .send_datagram("datagram b -> a".into())
+            .unwrap();
+
+        // Transmit buffered datagrams
+        app.update();
+
+        let mut connection_a = app
+            .world
+            .query::<Connection>()
+            .get_mut(&mut app.world, conn_a)
+            .unwrap();
+
+        let datagram = String::from_utf8(connection_a.read_datagram().unwrap().to_vec()).unwrap();
+        assert_eq!(datagram, "datagram b -> a");
+
+        let mut connection_b = app
+            .world
+            .query::<Connection>()
+            .get_mut(&mut app.world, conn_b)
+            .unwrap();
+
+        let datagram = String::from_utf8(connection_b.read_datagram().unwrap().to_vec()).unwrap();
+        assert_eq!(datagram, "datagram a -> b");
     }
 }
