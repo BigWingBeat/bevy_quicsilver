@@ -15,7 +15,7 @@ use quinn_proto::{
 };
 
 use crate::{
-    connection::{ConnectionBundle, ConnectionImpl},
+    connection::{ConnectingBundle, ConnectionImpl},
     incoming::Incoming,
     socket::UdpSocket,
     EntityError, Error, ErrorKind,
@@ -153,7 +153,7 @@ impl EndpointItem<'_> {
         &mut self,
         server_address: SocketAddr,
         server_name: &str,
-    ) -> Result<ConnectionBundle, Error> {
+    ) -> Result<ConnectingBundle, Error> {
         self.endpoint
             .connect(self.entity, server_address, server_name)
     }
@@ -170,7 +170,7 @@ impl EndpointItem<'_> {
         server_address: SocketAddr,
         server_name: &str,
         client_config: ClientConfig,
-    ) -> Result<ConnectionBundle, Error> {
+    ) -> Result<ConnectingBundle, Error> {
         self.endpoint
             .connect_with(self.entity, server_address, server_name, client_config)
     }
@@ -348,7 +348,7 @@ impl EndpointImpl {
         self_entity: Entity,
         server_address: SocketAddr,
         server_name: &str,
-    ) -> Result<ConnectionBundle, Error> {
+    ) -> Result<ConnectingBundle, Error> {
         self.default_client_config
             .clone()
             .ok_or(ConnectError::NoDefaultClientConfig.into())
@@ -363,14 +363,14 @@ impl EndpointImpl {
         server_address: SocketAddr,
         server_name: &str,
         client_config: ClientConfig,
-    ) -> Result<ConnectionBundle, Error> {
+    ) -> Result<ConnectingBundle, Error> {
         let now = Instant::now();
         // TODO: Why https://github.com/quinn-rs/quinn/blob/0.10.2/quinn/src/endpoint.rs#L185-L192
         self.endpoint
             .connect(now, client_config, server_address, server_name)
             .map_err(Into::into)
             .map(|(handle, connection)| {
-                ConnectionBundle::new(ConnectionImpl::new(self_entity, handle, connection))
+                ConnectingBundle::new(ConnectionImpl::new(self_entity, handle, connection))
             })
     }
 

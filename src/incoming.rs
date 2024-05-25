@@ -14,7 +14,7 @@ use bevy_ecs::{
 use quinn_proto::ServerConfig;
 
 use crate::{
-    connection::{ConnectionBundle, ConnectionImpl},
+    connection::{ConnectingBundle, ConnectionImpl},
     endpoint::Endpoint,
     EntityError, ErrorKind, KeepAlive,
 };
@@ -219,7 +219,7 @@ pub(crate) fn handle_incoming_responses(
         match result {
             // Connection successfully accepted
             Ok(Some((handle, connection))) => {
-                incoming_entity.insert(ConnectionBundle::new(ConnectionImpl::new(
+                incoming_entity.insert(ConnectingBundle::new(ConnectionImpl::new(
                     endpoint_entity,
                     handle,
                     connection,

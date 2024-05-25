@@ -23,14 +23,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// A bundle for adding a connection to an entity
+/// A bundle for adding a new connection to an entity
 #[derive(Debug, Bundle)]
-pub struct ConnectionBundle {
+pub struct ConnectingBundle {
     marker: StillConnecting,
     connection: ConnectionImpl,
 }
 
-impl ConnectionBundle {
+impl ConnectingBundle {
     pub(crate) fn new(connection: ConnectionImpl) -> Self {
         Self {
             marker: StillConnecting,
