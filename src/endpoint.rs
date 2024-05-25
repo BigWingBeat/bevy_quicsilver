@@ -572,12 +572,10 @@ fn udp_transmit<'a>(transmit: &quinn_proto::Transmit, buffer: &'a [u8]) -> quinn
 
 #[cfg(test)]
 mod tests {
-
     use std::{net::Ipv6Addr, sync::Arc};
 
     use bevy_app::{App, PostUpdate};
     use bevy_ecs::{
-        entity::Entity,
         event::{EventReader, Events},
         query::Without,
     };
