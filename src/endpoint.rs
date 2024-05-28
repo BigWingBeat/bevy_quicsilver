@@ -5,7 +5,7 @@ use bevy_ecs::{
     component::Component,
     entity::Entity,
     event::EventWriter,
-    query::{Added, QueryData, QueryEntityError},
+    query::{QueryData, QueryEntityError},
     system::{Commands, Query},
 };
 use hashbrown::HashMap;
@@ -452,26 +452,10 @@ impl EndpointImpl {
     }
 }
 
-/// Quinn refers to connections via [`ConnectionHandle`]s,
-/// which we have to map to [`Entity`]s in order to query the connections in question from the ECS
-pub(crate) fn find_new_connections(
-    new_connections: Query<(Entity, &ConnectionImpl), Added<ConnectionImpl>>,
-    mut endpoints: Query<Endpoint>,
-) {
-    for (entity, connection) in new_connections.iter() {
-        if let Ok(mut endpoint) = endpoints.get_mut(connection.endpoint) {
-            endpoint
-                .endpoint
-                .connections
-                .insert(connection.handle, entity);
-        }
-    }
-}
-
 pub(crate) fn poll_endpoints(
     mut commands: Commands,
     mut endpoint_query: Query<Endpoint>,
-    mut connection_query: Query<&mut ConnectionImpl>,
+    mut connection_query: Query<(Entity, &mut ConnectionImpl)>,
     mut error_events: EventWriter<EntityError>,
 ) {
     let now = Instant::now();
@@ -500,12 +484,19 @@ pub(crate) fn poll_endpoints(
                 &mut response_buffer,
             ) {
                 Some(DatagramEvent::ConnectionEvent(handle, event)) => {
-                    let &connection_entity = connections.get(&handle).unwrap_or_else(|| {
-                        panic!("ConnectionHandle {handle:?} is missing Entity mapping")
+                    let &mut connection_entity = connections.entry(handle).or_insert_with(|| {
+                        connection_query
+                            .iter()
+                            .find_map(|(entity, connection)| {
+                                (connection.handle == handle).then_some(entity)
+                            })
+                            .unwrap_or_else(|| {
+                                panic!("ConnectionHandle {handle:?} is missing Entity mapping")
+                            })
                     });
 
                     match connection_query.get_mut(connection_entity) {
-                        Ok(mut connection) => connection.handle_event(event),
+                        Ok((_, mut connection)) => connection.handle_event(event),
                         Err(QueryEntityError::QueryDoesNotMatch(entity)) => {
                             endpoint.handle_event(handle, EndpointEvent::drained());
                             error_events.send(EntityError::new(
