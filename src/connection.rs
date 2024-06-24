@@ -14,7 +14,11 @@ use quinn_proto::{
     SendDatagramError, StreamEvent, StreamId, Transmit, VarInt,
 };
 
-use crate::{endpoint::Endpoint, EntityError, Error, KeepAlive};
+use crate::{
+    endpoint::Endpoint,
+    streams::{RecvStreamBundle, SendStreamBundle},
+    EntityError, Error, KeepAlive,
+};
 
 use std::{
     any::Any,
@@ -105,6 +109,7 @@ pub(crate) struct FullyConnected;
 #[derive(Debug, QueryData)]
 #[query_data(mutable)]
 pub struct Connection {
+    entity: Entity,
     marker: &'static FullyConnected,
     connection: &'static mut ConnectionImpl,
 }
@@ -139,6 +144,58 @@ impl ConnectionItem<'_> {
     /// [`SendStream`]: crate::SendStream
     pub fn close(&mut self, error_code: VarInt, reason: Bytes) {
         self.connection.close(Instant::now(), error_code, reason)
+    }
+
+    /// Initiate a new outgoing unidirectional stream.
+    ///
+    /// Streams are cheap and instantaneous to open unless blocked by flow control. As a
+    /// consequence, the peer won't be notified that a stream has been opened until the stream is
+    /// actually used.
+    ///
+    /// Returns `None` if outgoing unidirectional streams are currently exhausted.
+    pub fn open_uni(&mut self) -> Option<SendStreamBundle> {
+        self.connection.open_uni(self.entity)
+    }
+
+    /// Initiate a new outgoing bidirectional stream.
+    ///
+    /// Streams are cheap and instantaneous to open unless blocked by flow control. As a
+    /// consequence, the peer won't be notified that a stream has been opened until the stream is
+    /// actually used to send data. Calling [`open_bi()`] then waiting to receive data from the [`RecvStream`] without writing
+    /// anything to the [`SendStream`] first will never succeed.
+    ///
+    /// Returns `None` if outgoing bidirectional streams are currently exhausted.
+    ///
+    /// [`open_bi()`]: crate::Connection::open_bi
+    /// [`SendStream`]: crate::SendStream
+    /// [`RecvStream`]: crate::RecvStream
+    pub fn open_bi(&mut self) -> Option<(SendStreamBundle, RecvStreamBundle)> {
+        self.connection.open_bi(self.entity)
+    }
+
+    /// Accept the next incoming unidirectional stream.
+    ///
+    /// Returns `None` if there are no new incoming unidirectional streams for this connection.
+    /// Has no impact on the data flow-control or stream concurrency limits.
+    pub fn accept_uni(&mut self) -> Option<RecvStreamBundle> {
+        self.connection.accept_uni(self.entity)
+    }
+
+    /// Accept the next incoming bidirectional stream.
+    ///
+    /// **Important Note**: The `Connection` that calls [`open_bi()`] must write to its [`SendStream`]
+    /// before the other `Connection` is able to `accept_bi()`.
+    /// Calling [`open_bi()`] then waiting to receive data from the [`RecvStream`] without writing
+    /// anything to the [`SendStream`] first will never succeed.
+    ///
+    /// Returns `None` if there are no new incoming bidirectional streams for this connection.
+    /// Has no impact on the data flow-control or stream concurrency limits.
+    ///
+    /// [`open_bi()`]: crate::Connection::open_bi
+    /// [`SendStream`]: crate::SendStream
+    /// [`RecvStream`]: crate::RecvStream
+    pub fn accept_bi(&mut self) -> Option<(SendStreamBundle, RecvStreamBundle)> {
+        self.connection.accept_bi(self.entity)
     }
 
     /// Transmit `data` as an unreliable, unordered application datagram
@@ -425,6 +482,46 @@ impl ConnectionImpl {
     fn close(&mut self, now: Instant, error_code: VarInt, reason: Bytes) {
         self.connection.close(now, error_code, reason);
         self.should_poll = true;
+    }
+
+    fn open_uni(&mut self, self_entity: Entity) -> Option<SendStreamBundle> {
+        self.connection
+            .streams()
+            .open(Dir::Uni)
+            .map(|stream| SendStreamBundle::new(self_entity, stream))
+    }
+
+    fn open_bi(&mut self, self_entity: Entity) -> Option<(SendStreamBundle, RecvStreamBundle)> {
+        self.connection.streams().open(Dir::Bi).map(|stream| {
+            (
+                SendStreamBundle::new(self_entity, stream),
+                RecvStreamBundle::new(self_entity, stream),
+            )
+        })
+    }
+
+    fn accept_uni(&mut self, self_entity: Entity) -> Option<RecvStreamBundle> {
+        self.connection
+            .streams()
+            .accept(Dir::Uni)
+            .map(|stream| RecvStreamBundle::new(self_entity, stream))
+    }
+
+    fn accept_bi(&mut self, self_entity: Entity) -> Option<(SendStreamBundle, RecvStreamBundle)> {
+        self.connection.streams().accept(Dir::Bi).map(|stream| {
+            (
+                SendStreamBundle::new(self_entity, stream),
+                RecvStreamBundle::new(self_entity, stream),
+            )
+        })
+    }
+
+    pub(crate) fn send_stream(&mut self, id: StreamId) -> quinn_proto::SendStream<'_> {
+        self.connection.send_stream(id)
+    }
+
+    pub(crate) fn recv_stream(&mut self, id: StreamId) -> quinn_proto::RecvStream<'_> {
+        self.connection.recv_stream(id)
     }
 
     fn send_datagram(&mut self, data: Bytes) -> Result<(), Error> {
@@ -734,7 +831,7 @@ pub(crate) fn poll_connections(
                     Err(error) => {
                         // I/O error
                         error_events.send(EntityError::new(entity, error));
-                        connection.close(now, 0u32.into(), "I/O error".into());
+                        connection.close(now, 0u32.into(), "I/O Error".into());
                         connection.io_error = true;
                         io_error = true;
                     }

@@ -254,7 +254,7 @@ impl EndpointReadOnlyItem<'_> {
     }
 }
 
-/// Actual underlying component type behind the [`EndpointBundle`] bundle and [`Endpoint`] querydata types
+/// Underlying component type behind the [`EndpointBundle`] bundle and [`Endpoint`] querydata types
 #[derive(Debug, Component)]
 struct EndpointImpl {
     endpoint: quinn_proto::Endpoint,

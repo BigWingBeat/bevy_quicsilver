@@ -20,6 +20,7 @@ pub mod incoming;
 pub mod ip;
 mod plugin;
 mod socket;
+pub mod streams;
 
 /// If this component is placed on an entity, it will never be automatically despawned by this library
 #[derive(Debug, Component)]

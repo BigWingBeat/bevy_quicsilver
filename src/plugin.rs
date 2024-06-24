@@ -9,6 +9,7 @@ use crate::{
     },
     endpoint::poll_endpoints,
     incoming::{handle_incoming_responses, send_new_incoming_events},
+    streams::{handle_added_streams, handle_removed_streams, StreamEntities},
     EntityError, IncomingResponse, NewIncoming,
 };
 
@@ -21,7 +22,8 @@ impl Plugin for QuicPlugin {
             app.add_plugins(TimePlugin);
         }
 
-        app.add_event::<NewIncoming>()
+        app.init_resource::<StreamEntities>()
+            .add_event::<NewIncoming>()
             .add_event::<IncomingResponse>()
             .add_event::<EntityError>()
             .add_event::<ConnectionEstablished>()
@@ -38,6 +40,8 @@ impl Plugin for QuicPlugin {
             .add_systems(
                 PostUpdate,
                 (
+                    handle_added_streams,
+                    handle_removed_streams,
                     handle_incoming_responses, // Exclusive system, handles user responses and possibly sends data, so runs in PostUpdate
                     poll_connections, // Sends data, and handles new connections spawned by handle_incoming_responses
                     apply_deferred, // Manually insert apply_deferred because auto_insert_sync_points could be disabled by something else
