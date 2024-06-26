@@ -16,13 +16,12 @@ use quinn_proto::{
 
 use crate::{
     endpoint::Endpoint,
-    streams::{RecvStreamBundle, SendStreamBundle},
+    streams::{RecvStreamBundle, SendStreamBundle, SendStreamImpl},
     EntityError, Error, KeepAlive,
 };
 
 use std::{
     any::Any,
-    iter,
     net::{IpAddr, SocketAddr},
     time::{Duration, Instant},
 };
@@ -441,12 +440,11 @@ pub(crate) struct ConnectionImpl {
     pub(crate) handle: ConnectionHandle,
     connection: quinn_proto::Connection,
     timeout_timer: Option<(Timer, Instant)>,
-    should_poll: bool,
+    pub(crate) should_poll: bool,
     io_error: bool,
     blocked_transmit: Option<Transmit>,
     transmit_buf: Vec<u8>,
-    pending_streams: Vec<Bytes>,
-    pending_writes: HashMap<StreamId, Vec<Bytes>>,
+    pub(crate) streams: HashMap<StreamId, Entity>,
     pending_datagrams: Vec<Bytes>,
 }
 
@@ -465,8 +463,7 @@ impl ConnectionImpl {
             io_error: false,
             blocked_transmit: None,
             transmit_buf: Vec::new(),
-            pending_streams: Vec::new(),
-            pending_writes: HashMap::default(),
+            streams: HashMap::new(),
             pending_datagrams: Vec::new(),
         }
     }
@@ -608,53 +605,6 @@ impl ConnectionImpl {
         self.should_poll = true;
     }
 
-    /// Serialize the given packet and send it over the network
-    // pub fn send<T: OutboundPacket>(&mut self, packet: T) -> Result<(), Error> {
-    //     let bytes = serialize(packet)?;
-    //     match T::CHANNEL {
-    //         Channel::Ordered => {
-    //             self.pending_writes
-    //                 .entry(&self.ordered_stream)
-    //                 .or_default()
-    //                 .push(bytes);
-
-    //             let result = self
-    //                 .connection
-    //                 .send_stream(self.ordered_stream)
-    //                 .write_chunks(bytes);
-
-    //             if result.is_err_and(|e| !matches!(e, WriteError::Blocked)) {
-    //                 return result;
-    //             }
-
-    //             if !bytes.is_empty() {
-    //                 self.pending_stream_writeable.push(bytes);
-    //             }
-    //         }
-    //         Channel::Unordered => match self.connection.streams().open(Dir::Uni) {
-    //             Some(stream_id) => {
-    //                 self.pending_writes
-    //                     .entry(&stream_id)
-    //                     .or_default()
-    //                     .push(bytes);
-
-    //                 let stream = self.connection.send_stream(stream_id);
-    //                 stream.write_chunks(bytes)?;
-
-    //                 if bytes.is_empty() {
-    //                     stream.finish()?;
-    //                 } else {
-    //                     self.pending_unordered_packets
-    //                         .push((Some(stream_id), bytes));
-    //                 }
-    //             }
-    //             None => self.pending_writes.entry(None).or_default().push(bytes),
-    //         },
-    //         Channel::Unreliable => self.connection.datagrams().send(bytes)?,
-    //     }
-    //     Ok(())
-    // }
-
     fn flush_pending_datagrams(&mut self) {
         self.pending_datagrams.retain(|datagram| {
             matches!(
@@ -662,25 +612,6 @@ impl ConnectionImpl {
                 Err(SendDatagramError::Blocked(_))
             )
         });
-    }
-
-    fn flush_pending_writes(&mut self) {
-        let mut streams = self.connection.streams();
-
-        for (stream_id, bytes) in iter::zip(
-            iter::from_fn(|| streams.open(Dir::Uni)),
-            iter::from_fn(|| self.pending_streams.pop()),
-        ) {
-            self.pending_writes
-                .entry(stream_id)
-                .or_default()
-                .push(bytes);
-        }
-
-        for (&stream_id, mut bytes) in self.pending_writes.iter_mut() {
-            let mut stream = self.connection.send_stream(stream_id);
-            stream.write_chunks(&mut bytes);
-        }
     }
 
     pub(crate) fn handle_event(&mut self, event: quinn_proto::ConnectionEvent) {
@@ -765,6 +696,7 @@ pub(crate) fn send_connection_established_events(
 pub(crate) fn poll_connections(
     mut commands: Commands,
     mut query: Query<(Entity, &mut ConnectionImpl, Has<KeepAlive>)>,
+    mut stream_query: Query<(Entity, &mut SendStreamImpl)>,
     mut endpoint: Query<Endpoint>,
     mut handshake_events: EventWriter<HandshakeDataReady>,
     mut error_events: EventWriter<EntityError>,
@@ -772,16 +704,6 @@ pub(crate) fn poll_connections(
 ) {
     let now = Instant::now();
     for (entity, mut connection, keepalive) in query.iter_mut() {
-        if connection.is_drained() {
-            if keepalive {
-                commands
-                    .entity(entity)
-                    .remove::<(ConnectionImpl, StillConnecting, FullyConnected)>();
-            } else {
-                commands.entity(entity).despawn();
-            }
-        }
-
         let mut endpoint = match endpoint.get_mut(connection.endpoint) {
             Ok(endpoint) => endpoint,
             Err(QueryEntityError::QueryDoesNotMatch(_))
@@ -798,6 +720,18 @@ pub(crate) fn poll_connections(
             }
             Err(QueryEntityError::AliasedMutability(_)) => unreachable!(),
         };
+
+        if connection.is_drained() {
+            if keepalive {
+                commands
+                    .entity(entity)
+                    .remove::<(ConnectionImpl, StillConnecting, FullyConnected)>();
+            } else {
+                commands.entity(entity).despawn();
+                // TODO: For streams as well
+                // endpoint.endpoint.connections.remove(&connection.handle);
+            }
+        }
 
         connection.handle_timeout(now, time.delta());
 
@@ -848,6 +782,7 @@ pub(crate) fn poll_connections(
                 .collect::<Vec<_>>();
 
             // #4: poll
+            let mut streams_to_flush = Vec::new();
             while let Some(event) = connection.poll() {
                 match event {
                     Event::HandshakeDataReady => {
@@ -864,7 +799,7 @@ pub(crate) fn poll_connections(
                     }
                     Event::Stream(StreamEvent::Opened { dir }) => todo!(),
                     Event::Stream(StreamEvent::Readable { id }) => todo!(),
-                    Event::Stream(StreamEvent::Writable { id }) => todo!(),
+                    Event::Stream(StreamEvent::Writable { id }) => streams_to_flush.push(id),
                     Event::Stream(StreamEvent::Finished { id }) => {}
                     Event::Stream(StreamEvent::Stopped { id, error_code }) => todo!(),
                     Event::Stream(StreamEvent::Available { dir }) => todo!(),
@@ -876,6 +811,21 @@ pub(crate) fn poll_connections(
             // Process events after finishing polling instead of immediately
             for event in events {
                 connection.handle_event(event);
+            }
+
+            for id in streams_to_flush {
+                connection.should_poll = true;
+                let &mut stream_entity = connection.streams.entry(id).or_insert_with(|| {
+                    stream_query
+                        .iter()
+                        .find_map(|(entity, stream)| (stream.stream == id).then_some(entity))
+                        .unwrap_or_else(|| panic!("StreamId {id:?} is missing Entity mapping"))
+                });
+
+                let (_, mut stream) = stream_query.get_mut(stream_entity).unwrap();
+                let mut proto_stream = connection.send_stream(id);
+                let _ = proto_stream.write_chunks(&mut stream.pending_writes);
+                stream.pending_writes.retain(|bytes| !bytes.is_empty());
             }
         }
 

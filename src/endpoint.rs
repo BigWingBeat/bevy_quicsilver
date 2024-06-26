@@ -120,7 +120,7 @@ impl EndpointBundle {
 #[query_data(mutable)]
 pub struct Endpoint {
     entity: Entity,
-    endpoint: &'static mut EndpointImpl,
+    pub(crate) endpoint: &'static mut EndpointImpl,
 }
 
 impl EndpointItem<'_> {
@@ -256,10 +256,10 @@ impl EndpointReadOnlyItem<'_> {
 
 /// Underlying component type behind the [`EndpointBundle`] bundle and [`Endpoint`] querydata types
 #[derive(Debug, Component)]
-struct EndpointImpl {
+pub(crate) struct EndpointImpl {
     endpoint: quinn_proto::Endpoint,
     default_client_config: Option<ClientConfig>,
-    connections: HashMap<ConnectionHandle, Entity>,
+    pub(crate) connections: HashMap<ConnectionHandle, Entity>,
     socket: UdpSocket,
 }
 
