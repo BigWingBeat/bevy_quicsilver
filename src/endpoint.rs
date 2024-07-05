@@ -484,16 +484,9 @@ pub(crate) fn poll_endpoints(
                 &mut response_buffer,
             ) {
                 Some(DatagramEvent::ConnectionEvent(handle, event)) => {
-                    let &mut connection_entity = connections.entry(handle).or_insert_with(|| {
-                        connection_query
-                            .iter()
-                            .find_map(|(entity, connection)| {
-                                (connection.handle == handle).then_some(entity)
-                            })
-                            .unwrap_or_else(|| {
-                                panic!("ConnectionHandle {handle:?} is missing Entity mapping")
-                            })
-                    });
+                    let &connection_entity = connections
+                        .get(&handle)
+                        .expect("ConnectionHandle {handle:?} is missing Entity mapping");
 
                     match connection_query.get_mut(connection_entity) {
                         Ok((_, mut connection)) => connection.handle_event(event),

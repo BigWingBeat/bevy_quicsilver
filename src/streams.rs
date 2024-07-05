@@ -1,10 +1,9 @@
 use bevy_ecs::{
     bundle::Bundle,
-    component::Component,
-    entity::{Entity, EntityHashMap},
-    query::{Added, QueryEntityError},
-    removal_detection::RemovedComponents,
-    system::{Query, ResMut, Resource, SystemParam},
+    component::{Component, ComponentHooks, StorageType},
+    entity::Entity,
+    query::QueryEntityError,
+    system::{Query, SystemParam},
 };
 use bytes::Bytes;
 use quinn_proto::{Chunks, ClosedStream, FinishError, ReadableError, StreamId, VarInt, WriteError};
@@ -175,11 +174,51 @@ impl SendStreamBundle {
 }
 
 /// Underlying component type behind the [`SendStream`] and [`SendStreamBundle`] types
-#[derive(Debug, Component)]
+#[derive(Debug)]
 pub(crate) struct SendStreamImpl {
     connection: Entity,
     pub(crate) stream: StreamId,
     pub(crate) pending_writes: Vec<Bytes>,
+}
+
+impl Component for SendStreamImpl {
+    const STORAGE_TYPE: StorageType = StorageType::Table;
+
+    fn register_component_hooks(hooks: &mut ComponentHooks) {
+        hooks
+            .on_add(|mut world, entity, _component_id| {
+                let stream = world.get::<SendStreamImpl>(entity).unwrap();
+                let id = stream.stream;
+                let Some(mut connection) = world.get_mut::<ConnectionImpl>(stream.connection)
+                else {
+                    return;
+                };
+                connection.streams.insert(id, entity);
+            })
+            .on_remove(|mut world, entity, _component_id| {
+                let stream = world.get::<SendStreamImpl>(entity).unwrap();
+                let id = stream.stream;
+
+                let Some(mut connection) = world.get_mut::<ConnectionImpl>(stream.connection)
+                else {
+                    return;
+                };
+
+                connection.should_poll = true;
+
+                let mut stream = connection.send_stream(id);
+
+                // https://github.com/quinn-rs/quinn/blob/0.11.2/quinn/src/send_stream.rs#L287
+                match stream.finish() {
+                    Ok(()) => {}
+                    Err(FinishError::Stopped(reason)) => {
+                        let _ = stream.reset(reason);
+                    }
+                    // Already finished or reset, which is fine.
+                    Err(FinishError::ClosedStream) => {}
+                }
+            });
+    }
 }
 
 /// A stream that can only be used to receive data.
@@ -270,70 +309,39 @@ impl RecvStreamBundle {
 }
 
 /// Underlying component type behind the [`RecvStream`] and [`RecvStreamBundle`] types
-#[derive(Debug, Component)]
+#[derive(Debug)]
 pub(crate) struct RecvStreamImpl {
     connection: Entity,
     stream: StreamId,
 }
 
-#[derive(Debug, Resource, Default)]
-pub(crate) struct StreamEntities(EntityHashMap<(Entity, StreamId)>);
+impl Component for RecvStreamImpl {
+    const STORAGE_TYPE: StorageType = StorageType::Table;
 
-pub(crate) fn handle_added_streams(
-    mut mapping: ResMut<StreamEntities>,
-    send: Query<(Entity, &SendStreamImpl), Added<SendStreamImpl>>,
-    recv: Query<(Entity, &RecvStreamImpl), Added<RecvStreamImpl>>,
-) {
-    for (entity, send) in send.iter() {
-        mapping.0.insert(entity, (send.connection, send.stream));
-    }
+    fn register_component_hooks(hooks: &mut ComponentHooks) {
+        hooks
+            .on_add(|mut world, entity, _component_id| {
+                let stream = world.get::<SendStreamImpl>(entity).unwrap();
+                let id = stream.stream;
+                let Some(mut connection) = world.get_mut::<ConnectionImpl>(stream.connection)
+                else {
+                    return;
+                };
+                connection.streams.insert(id, entity);
+            })
+            .on_remove(|mut world, entity, _component_id| {
+                let stream = world.get::<SendStreamImpl>(entity).unwrap();
+                let id = stream.stream;
 
-    for (entity, recv) in recv.iter() {
-        mapping.0.insert(entity, (recv.connection, recv.stream));
-    }
-}
+                let Some(mut connection) = world.get_mut::<ConnectionImpl>(stream.connection)
+                else {
+                    return;
+                };
 
-pub(crate) fn handle_removed_streams(
-    mut mapping: ResMut<StreamEntities>,
-    mut send: RemovedComponents<SendStreamImpl>,
-    mut recv: RemovedComponents<RecvStreamImpl>,
-    mut connections: Query<&mut ConnectionImpl>,
-) {
-    for entity in send.read() {
-        let Some((connection, id)) = mapping.0.remove(&entity) else {
-            continue;
-        };
+                connection.should_poll = true;
 
-        let Ok(mut connection) = connections.get_mut(connection) else {
-            continue;
-        };
-        connection.should_poll = true;
-
-        let mut stream = connection.send_stream(id);
-
-        // https://github.com/quinn-rs/quinn/blob/0.11.2/quinn/src/send_stream.rs#L287
-        match stream.finish() {
-            Ok(()) => {}
-            Err(FinishError::Stopped(reason)) => {
-                let _ = stream.reset(reason);
-            }
-            // Already finished or reset, which is fine.
-            Err(FinishError::ClosedStream) => {}
-        }
-    }
-
-    for entity in recv.read() {
-        let Some((connection, id)) = mapping.0.remove(&entity) else {
-            continue;
-        };
-
-        let Ok(mut connection) = connections.get_mut(connection) else {
-            continue;
-        };
-        connection.should_poll = true;
-
-        let mut stream = connection.recv_stream(id);
-
-        let _ = stream.stop(0u32.into());
+                let mut stream = connection.recv_stream(id);
+                let _ = stream.stop(0u32.into());
+            });
     }
 }

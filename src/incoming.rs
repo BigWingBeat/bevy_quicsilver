@@ -4,11 +4,11 @@ use std::{
 };
 
 use bevy_ecs::{
-    component::Component,
+    component::{Component, ComponentHooks, StorageType},
     entity::Entity,
     event::{Event, EventReader, EventWriter},
-    query::{Added, QueryEntityError, QueryState},
-    system::{Query, SystemState},
+    query::{QueryEntityError, QueryState},
+    system::SystemState,
     world::World,
 };
 use quinn_proto::ServerConfig;
@@ -114,10 +114,20 @@ impl IncomingResponse {
 ///     }
 /// }
 /// ```
-#[derive(Debug, Component)]
+#[derive(Debug)]
 pub struct Incoming {
     pub(crate) incoming: quinn_proto::Incoming,
     pub(crate) endpoint_entity: Entity,
+}
+
+impl Component for Incoming {
+    const STORAGE_TYPE: StorageType = StorageType::Table;
+
+    fn register_component_hooks(hooks: &mut ComponentHooks) {
+        hooks.on_add(|mut world, entity, _component_id| {
+            world.send_event(NewIncoming(entity));
+        });
+    }
 }
 
 impl Incoming {
@@ -147,17 +157,6 @@ impl Incoming {
     /// The entity that has the [`Endpoint`] component that is receiving this connection
     pub fn endpoint(&self) -> Entity {
         self.endpoint_entity
-    }
-}
-
-/// Events are sent in system using [`Added`] instead of where the component is actually inserted,
-/// because new events are visible immediately, but inserting components is deferred until `Commands` are applied
-pub(crate) fn send_new_incoming_events(
-    new_incomings: Query<Entity, Added<Incoming>>,
-    mut events: EventWriter<NewIncoming>,
-) {
-    for entity in new_incomings.iter() {
-        events.send(NewIncoming(entity));
     }
 }
 

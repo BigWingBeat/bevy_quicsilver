@@ -1,9 +1,9 @@
 use bevy_ecs::{
     bundle::Bundle,
-    component::Component,
+    component::{Component, ComponentHooks, StorageType},
     entity::Entity,
     event::EventWriter,
-    query::{Added, Has, QueryData, QueryEntityError},
+    query::{Has, QueryData, QueryEntityError},
     system::{Commands, Query, Res},
 };
 use bevy_time::{Real, Time, Timer, TimerMode};
@@ -15,7 +15,7 @@ use quinn_proto::{
 };
 
 use crate::{
-    endpoint::Endpoint,
+    endpoint::{Endpoint, EndpointImpl},
     streams::{RecvStreamBundle, SendStreamBundle, SendStreamImpl},
     EntityError, Error, KeepAlive,
 };
@@ -101,10 +101,20 @@ impl ConnectingItem<'_> {
 
 /// Marker component type for connection entities that are fully established
 /// (i.e. exposed to the user through [`Connection`])
-#[derive(Debug, Component)]
-pub(crate) struct FullyConnected;
+#[derive(Debug)]
+struct FullyConnected;
 
-/// A QUIC connection
+impl Component for FullyConnected {
+    const STORAGE_TYPE: StorageType = StorageType::Table;
+
+    fn register_component_hooks(hooks: &mut ComponentHooks) {
+        hooks.on_add(|mut world, entity, _component_id| {
+            world.send_event(ConnectionEstablished(entity));
+        });
+    }
+}
+
+/// A fully established QUIC connection
 #[derive(Debug, QueryData)]
 #[query_data(mutable)]
 pub struct Connection {
@@ -434,7 +444,7 @@ impl ConnectionReadOnlyItem<'_> {
 }
 
 /// Underlying component type behind the [`Connecting`] and [`Connection`] querydata types
-#[derive(Debug, Component)]
+#[derive(Debug)]
 pub(crate) struct ConnectionImpl {
     pub(crate) endpoint: Entity,
     pub(crate) handle: ConnectionHandle,
@@ -446,6 +456,21 @@ pub(crate) struct ConnectionImpl {
     transmit_buf: Vec<u8>,
     pub(crate) streams: HashMap<StreamId, Entity>,
     pending_datagrams: Vec<Bytes>,
+}
+
+impl Component for ConnectionImpl {
+    const STORAGE_TYPE: StorageType = StorageType::Table;
+
+    fn register_component_hooks(hooks: &mut ComponentHooks) {
+        hooks.on_add(|mut world, entity, _component_id| {
+            let connection = world.get::<ConnectionImpl>(entity).unwrap();
+            let handle = connection.handle;
+            let Some(mut endpoint) = world.get_mut::<EndpointImpl>(connection.endpoint) else {
+                return;
+            };
+            endpoint.connections.insert(handle, entity);
+        });
+    }
 }
 
 impl ConnectionImpl {
@@ -681,22 +706,11 @@ impl ConnectionImpl {
     }
 }
 
-/// Events are sent in system using [`Added`] instead of where the component is actually inserted,
-/// because new events are visible immediately, but inserting components is deferred until `Commands` are applied
-pub(crate) fn send_connection_established_events(
-    connections: Query<Entity, Added<FullyConnected>>,
-    mut events: EventWriter<ConnectionEstablished>,
-) {
-    for entity in connections.iter() {
-        events.send(ConnectionEstablished(entity));
-    }
-}
-
 /// Based on https://github.com/quinn-rs/quinn/blob/0.11.1/quinn/src/connection.rs#L231
 pub(crate) fn poll_connections(
     mut commands: Commands,
     mut query: Query<(Entity, &mut ConnectionImpl, Has<KeepAlive>)>,
-    mut stream_query: Query<(Entity, &mut SendStreamImpl)>,
+    mut stream_query: Query<&mut SendStreamImpl>,
     mut endpoint: Query<Endpoint>,
     mut handshake_events: EventWriter<HandshakeDataReady>,
     mut error_events: EventWriter<EntityError>,
@@ -728,8 +742,6 @@ pub(crate) fn poll_connections(
                     .remove::<(ConnectionImpl, StillConnecting, FullyConnected)>();
             } else {
                 commands.entity(entity).despawn();
-                // TODO: For streams as well
-                // endpoint.endpoint.connections.remove(&connection.handle);
             }
         }
 
@@ -814,18 +826,19 @@ pub(crate) fn poll_connections(
             }
 
             for id in streams_to_flush {
-                connection.should_poll = true;
-                let &mut stream_entity = connection.streams.entry(id).or_insert_with(|| {
-                    stream_query
-                        .iter()
-                        .find_map(|(entity, stream)| (stream.stream == id).then_some(entity))
-                        .unwrap_or_else(|| panic!("StreamId {id:?} is missing Entity mapping"))
-                });
+                let &stream_entity = connection
+                    .streams
+                    .get(&id)
+                    .expect("StreamId {id:?} is missing Entity mapping");
 
-                let (_, mut stream) = stream_query.get_mut(stream_entity).unwrap();
+                let Ok(mut stream) = stream_query.get_mut(stream_entity) else {
+                    continue;
+                };
+
                 let mut proto_stream = connection.send_stream(id);
                 let _ = proto_stream.write_chunks(&mut stream.pending_writes);
                 stream.pending_writes.retain(|bytes| !bytes.is_empty());
+                connection.should_poll = true;
             }
         }
 
