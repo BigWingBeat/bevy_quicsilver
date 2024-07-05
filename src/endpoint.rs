@@ -635,32 +635,32 @@ mod tests {
         ($client_app:ident, $server_app:ident, $client_endpoint_entity:ident, $server_endpoint_entity:ident) => {{
             // Get the `SocketAddr` that the client should connect to
             let server_addr = $server_app
-                .world
+                .world_mut()
                 .query::<Endpoint>()
-                .get(&$server_app.world, $server_endpoint_entity)
+                .get($server_app.world(), $server_endpoint_entity)
                 .unwrap()
                 .local_addr()
                 .unwrap();
 
             // Initiate connection from client to server
             let client_connection = $client_app
-                .world
+                .world_mut()
                 .query::<Endpoint>()
-                .get_mut(&mut $client_app.world, $client_endpoint_entity)
+                .get_mut($client_app.world_mut(), $client_endpoint_entity)
                 .unwrap()
                 .connect(server_addr, "localhost")
                 .unwrap();
 
             // Spawn client-side connection
-            let client_connection = $client_app.world.spawn(client_connection).id();
+            let client_connection = $client_app.world_mut().spawn(client_connection).id();
 
             // Client connection sends packet to server
             $client_app.update();
 
             let stats = $client_app
-                .world
+                .world_mut()
                 .query::<Connecting>()
-                .get(&$client_app.world, client_connection)
+                .get($client_app.world(), client_connection)
                 .unwrap()
                 .stats();
 
@@ -671,22 +671,22 @@ mod tests {
             // Server reads packet from client and spawns an Incoming
             $server_app.update();
 
-            let events = $server_app.world.resource::<Events<NewIncoming>>();
+            let events = $server_app.world().resource::<Events<NewIncoming>>();
             let mut reader = events.get_reader();
             let mut events = reader.read(events);
             let server_connection = events.next().unwrap().0;
             assert!(events.next().is_none());
 
             let incoming = $server_app
-                .world
+                .world_mut()
                 .query::<&Incoming>()
-                .get(&$server_app.world, server_connection)
+                .get($server_app.world(), server_connection)
                 .unwrap();
 
             assert_eq!(incoming.endpoint(), $server_endpoint_entity);
 
             $server_app
-                .world
+                .world_mut()
                 .resource_mut::<Events<IncomingResponse>>()
                 .send(IncomingResponse::accept(server_connection));
 
@@ -694,9 +694,9 @@ mod tests {
             $server_app.update();
 
             let stats = $server_app
-                .world
+                .world_mut()
                 .query_filtered::<Connecting, Without<Incoming>>()
-                .get(&$server_app.world, server_connection)
+                .get($server_app.world(), server_connection)
                 .unwrap()
                 .stats();
 
@@ -719,9 +719,9 @@ mod tests {
         ($client_app:ident, $server_app:ident, $client_connection_entity:ident, $server_connection_entity:ident) => {{
             // Confirm that the connections can send data to each other
             let mut client_connection = $client_app
-                .world
+                .world_mut()
                 .query::<Connection>()
-                .get_mut(&mut $client_app.world, $client_connection_entity)
+                .get_mut($client_app.world_mut(), $client_connection_entity)
                 .expect("0");
 
             client_connection
@@ -729,9 +729,9 @@ mod tests {
                 .expect("1");
 
             let mut server_connection = $server_app
-                .world
+                .world_mut()
                 .query::<Connection>()
-                .get_mut(&mut $server_app.world, $server_connection_entity)
+                .get_mut($server_app.world_mut(), $server_connection_entity)
                 .expect("2");
 
             server_connection
@@ -744,9 +744,9 @@ mod tests {
             $client_app.update();
 
             let mut client_connection = $client_app
-                .world
+                .world_mut()
                 .query::<Connection>()
-                .get_mut(&mut $client_app.world, $client_connection_entity)
+                .get_mut($client_app.world_mut(), $client_connection_entity)
                 .expect("4");
 
             let datagram =
@@ -755,9 +755,9 @@ mod tests {
             assert_eq!(datagram, "datagram server -> client");
 
             let mut server_connection = $server_app
-                .world
+                .world_mut()
                 .query::<Connection>()
-                .get_mut(&mut $server_app.world, $server_connection_entity)
+                .get_mut($server_app.world_mut(), $server_connection_entity)
                 .expect("7");
 
             let datagram =
@@ -793,12 +793,12 @@ mod tests {
         )
         .unwrap();
 
-        let endpoint_entity = app.world.spawn(endpoint).id();
+        let endpoint_entity = app.world_mut().spawn(endpoint).id();
 
         let (client_connection, server_connection) =
             establish_connection!(app, app, endpoint_entity, endpoint_entity);
 
-        let events = app.world.resource::<Events<ConnectionEstablished>>();
+        let events = app.world().resource::<Events<ConnectionEstablished>>();
         let mut reader = events.get_reader();
         let mut events = reader.read(events);
 
@@ -821,13 +821,13 @@ mod tests {
         // Generate certificate for server to advertise and client to trust
         let key = generate_self_signed();
 
-        let client_endpoint = app.world.spawn(client_endpoint(&key)).id();
-        let server_endpoint = app.world.spawn(server_endpoint(&key)).id();
+        let client_endpoint = app.world_mut().spawn(client_endpoint(&key)).id();
+        let server_endpoint = app.world_mut().spawn(server_endpoint(&key)).id();
 
         let (client_connection, server_connection) =
             establish_connection!(app, app, client_endpoint, server_endpoint);
 
-        let events = app.world.resource::<Events<ConnectionEstablished>>();
+        let events = app.world().resource::<Events<ConnectionEstablished>>();
         let mut reader = events.get_reader();
         let mut events = reader.read(events);
 
@@ -851,21 +851,25 @@ mod tests {
         // Generate certificate for server to advertise and client to trust
         let key = generate_self_signed();
 
-        let client_endpoint = client_app.world.spawn(client_endpoint(&key)).id();
-        let server_endpoint = server_app.world.spawn(server_endpoint(&key)).id();
+        let client_endpoint = client_app.world_mut().spawn(client_endpoint(&key)).id();
+        let server_endpoint = server_app.world_mut().spawn(server_endpoint(&key)).id();
 
         let (client_connection, server_connection) =
             establish_connection!(client_app, server_app, client_endpoint, server_endpoint);
 
         // Each app should have 1 connection established event
-        let events = client_app.world.resource::<Events<ConnectionEstablished>>();
+        let events = client_app
+            .world()
+            .resource::<Events<ConnectionEstablished>>();
         let mut reader = events.get_reader();
         let mut events = reader.read(events);
         let connection_entity = events.next().unwrap().0;
         assert!(events.next().is_none());
         assert_eq!(connection_entity, client_connection);
 
-        let events = server_app.world.resource::<Events<ConnectionEstablished>>();
+        let events = server_app
+            .world()
+            .resource::<Events<ConnectionEstablished>>();
         let mut reader = events.get_reader();
         let mut events = reader.read(events);
         let connection_entity = events.next().unwrap().0;
