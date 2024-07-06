@@ -474,14 +474,30 @@ impl Component for ConnectionImpl {
     const STORAGE_TYPE: StorageType = StorageType::Table;
 
     fn register_component_hooks(hooks: &mut ComponentHooks) {
-        hooks.on_insert(|mut world, entity, _component_id| {
-            let connection = world.get::<ConnectionImpl>(entity).unwrap();
-            let handle = connection.handle;
-            let Some(mut endpoint) = world.get_mut::<EndpointImpl>(connection.endpoint) else {
-                return;
-            };
-            endpoint.connections.insert(handle, entity);
-        });
+        hooks
+            .on_insert(|mut world, entity, _component_id| {
+                let connection = world.get::<Self>(entity).unwrap();
+                let handle = connection.handle;
+                let Some(mut endpoint) = world.get_mut::<EndpointImpl>(connection.endpoint) else {
+                    return;
+                };
+                endpoint.connections.insert(handle, entity);
+            })
+            .on_remove(|mut world, entity, _component_id| {
+                let connection = world.get::<Self>(entity).unwrap();
+                for stream_entity in connection.streams.values().copied().collect::<Vec<_>>() {
+                    if let Some(stream) = world.get_entity(stream_entity) {
+                        if stream.contains::<KeepAlive>() {
+                            world
+                                .commands()
+                                .entity(stream_entity)
+                                .remove::<(SendStreamBundle, RecvStreamBundle)>();
+                        } else {
+                            world.commands().entity(stream_entity).despawn();
+                        }
+                    }
+                }
+            });
     }
 }
 
