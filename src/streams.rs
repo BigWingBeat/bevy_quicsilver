@@ -224,7 +224,7 @@ impl Component for SendStreamImpl {
     fn register_component_hooks(hooks: &mut ComponentHooks) {
         hooks
             .on_insert(|mut world, entity, _component_id| {
-                let stream = world.get::<SendStreamImpl>(entity).unwrap();
+                let stream = world.get::<Self>(entity).unwrap();
                 let id = stream.stream;
                 let Some(mut connection) = world.get_mut::<ConnectionImpl>(stream.connection)
                 else {
@@ -234,7 +234,7 @@ impl Component for SendStreamImpl {
                 connection.streams.insert(id, entity);
             })
             .on_remove(|mut world, entity, _component_id| {
-                let stream = world.get::<SendStreamImpl>(entity).unwrap();
+                let stream = world.get::<Self>(entity).unwrap();
                 let id = stream.stream;
 
                 let Some(mut connection) = world.get_mut::<ConnectionImpl>(stream.connection)
@@ -396,7 +396,7 @@ impl Component for RecvStreamImpl {
     fn register_component_hooks(hooks: &mut ComponentHooks) {
         hooks
             .on_insert(|mut world, entity, _component_id| {
-                let stream = world.get::<SendStreamImpl>(entity).unwrap();
+                let stream = world.get::<Self>(entity).unwrap();
                 let id = stream.stream;
                 let Some(mut connection) = world.get_mut::<ConnectionImpl>(stream.connection)
                 else {
@@ -406,7 +406,7 @@ impl Component for RecvStreamImpl {
                 connection.streams.insert(id, entity);
             })
             .on_remove(|mut world, entity, _component_id| {
-                let stream = world.get::<SendStreamImpl>(entity).unwrap();
+                let stream = world.get::<Self>(entity).unwrap();
                 let id = stream.stream;
 
                 let Some(mut connection) = world.get_mut::<ConnectionImpl>(stream.connection)
