@@ -489,7 +489,15 @@ pub(crate) fn poll_endpoints(
                         .expect("ConnectionHandle {handle:?} is missing Entity mapping");
 
                     match connection_query.get_mut(connection_entity) {
-                        Ok((_, mut connection)) => connection.handle_event(event),
+                        Ok((_, mut connection)) => {
+                            if connection.handle == handle && connection.endpoint == entity {
+                                connection.handle_event(event);
+                            } else {
+                                // A new connection was inserted onto the entity, overwriting the previous connection
+                                endpoint.handle_event(handle, EndpointEvent::drained());
+                                connections.remove(&handle);
+                            }
+                        }
                         Err(QueryEntityError::QueryDoesNotMatch(entity)) => {
                             endpoint.handle_event(handle, EndpointEvent::drained());
                             error_events.send(EntityError::new(

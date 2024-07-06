@@ -158,23 +158,60 @@ impl<'a> SendStream<'a> {
 /// A bundle for adding a [`SendStream`] to an entity
 #[derive(Debug, Bundle)]
 pub struct SendStreamBundle {
-    stream: SendStreamImpl,
+    stream: SendStreamInitializer,
+    remover: SendStreamRemover,
 }
 
 impl SendStreamBundle {
     pub(crate) fn new(connection: Entity, stream: StreamId) -> Self {
         Self {
-            stream: SendStreamImpl {
+            stream: SendStreamInitializer(SendStreamImpl {
                 connection,
                 stream,
                 pending_writes: Vec::new(),
-            },
+            }),
+            remover: SendStreamRemover,
         }
     }
 }
 
-/// Underlying component type behind the [`SendStream`] and [`SendStreamBundle`] types
+/// Hack so that the stream remove hook runs even if a new stream is inserted onto an entity that already has one
 #[derive(Debug)]
+struct SendStreamInitializer(SendStreamImpl);
+
+impl Component for SendStreamInitializer {
+    const STORAGE_TYPE: StorageType = StorageType::Table;
+
+    fn register_component_hooks(hooks: &mut ComponentHooks) {
+        hooks.on_insert(|mut world, entity, _component_id| {
+            let stream = world.get::<Self>(entity).unwrap().0.clone();
+            world
+                .commands()
+                .entity(entity)
+                .remove::<(Self, SendStreamImpl)>()
+                .insert(stream);
+        });
+    }
+}
+
+/// `SendStreamImpl` is a private type and not in `SendStreamBundle` because of the initializer hack,
+/// but removing a stream from an entity is done by specifying `SendStreamBundle` for removal,
+/// so this marker component exists to make that operation actually remove the stream as expected
+#[derive(Debug)]
+struct SendStreamRemover;
+
+impl Component for SendStreamRemover {
+    const STORAGE_TYPE: StorageType = StorageType::Table;
+
+    fn register_component_hooks(hooks: &mut ComponentHooks) {
+        hooks.on_remove(|mut world, entity, _component_id| {
+            world.commands().entity(entity).remove::<SendStreamImpl>();
+        });
+    }
+}
+
+/// Underlying component type behind the [`SendStream`] and [`SendStreamBundle`] types
+#[derive(Debug, Clone)]
 pub(crate) struct SendStreamImpl {
     connection: Entity,
     pub(crate) stream: StreamId,
@@ -186,13 +223,14 @@ impl Component for SendStreamImpl {
 
     fn register_component_hooks(hooks: &mut ComponentHooks) {
         hooks
-            .on_add(|mut world, entity, _component_id| {
+            .on_insert(|mut world, entity, _component_id| {
                 let stream = world.get::<SendStreamImpl>(entity).unwrap();
                 let id = stream.stream;
                 let Some(mut connection) = world.get_mut::<ConnectionImpl>(stream.connection)
                 else {
                     return;
                 };
+
                 connection.streams.insert(id, entity);
             })
             .on_remove(|mut world, entity, _component_id| {
@@ -214,7 +252,7 @@ impl Component for SendStreamImpl {
                     Err(FinishError::Stopped(reason)) => {
                         let _ = stream.reset(reason);
                     }
-                    // Already finished or reset, which is fine.
+                    // Already finished or reset, which is fine
                     Err(FinishError::ClosedStream) => {}
                 }
             });
@@ -297,19 +335,56 @@ impl<'a> RecvStream<'a> {
 /// A bundle for adding a [`RecvStream`] to an entity
 #[derive(Debug, Bundle)]
 pub struct RecvStreamBundle {
-    stream: RecvStreamImpl,
+    stream: RecvStreamInitializer,
+    remover: RecvStreamRemover,
 }
 
 impl RecvStreamBundle {
     pub(crate) fn new(connection: Entity, stream: StreamId) -> Self {
         Self {
-            stream: RecvStreamImpl { connection, stream },
+            stream: RecvStreamInitializer(RecvStreamImpl { connection, stream }),
+            remover: RecvStreamRemover,
         }
     }
 }
 
-/// Underlying component type behind the [`RecvStream`] and [`RecvStreamBundle`] types
+/// Hack so that the stream remove hook runs even if a new stream is inserted onto an entity that already has one
 #[derive(Debug)]
+struct RecvStreamInitializer(RecvStreamImpl);
+
+impl Component for RecvStreamInitializer {
+    const STORAGE_TYPE: StorageType = StorageType::Table;
+
+    fn register_component_hooks(hooks: &mut ComponentHooks) {
+        hooks.on_insert(|mut world, entity, _component_id| {
+            let stream = world.get::<Self>(entity).unwrap().0;
+            world
+                .commands()
+                .entity(entity)
+                .remove::<(Self, RecvStreamImpl)>()
+                .insert(stream);
+        });
+    }
+}
+
+/// `RecvStreamImpl` is a private type and not in `RecvStreamBundle` because of the initializer hack,
+/// but removing a stream from an entity is done by specifying `RecvStreamBundle` for removal,
+/// so this marker component exists to make that operation actually remove the stream as expected
+#[derive(Debug)]
+struct RecvStreamRemover;
+
+impl Component for RecvStreamRemover {
+    const STORAGE_TYPE: StorageType = StorageType::Table;
+
+    fn register_component_hooks(hooks: &mut ComponentHooks) {
+        hooks.on_remove(|mut world, entity, _component_id| {
+            world.commands().entity(entity).remove::<RecvStreamImpl>();
+        });
+    }
+}
+
+/// Underlying component type behind the [`RecvStream`] and [`RecvStreamBundle`] types
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct RecvStreamImpl {
     connection: Entity,
     stream: StreamId,
@@ -320,13 +395,14 @@ impl Component for RecvStreamImpl {
 
     fn register_component_hooks(hooks: &mut ComponentHooks) {
         hooks
-            .on_add(|mut world, entity, _component_id| {
+            .on_insert(|mut world, entity, _component_id| {
                 let stream = world.get::<SendStreamImpl>(entity).unwrap();
                 let id = stream.stream;
                 let Some(mut connection) = world.get_mut::<ConnectionImpl>(stream.connection)
                 else {
                     return;
                 };
+
                 connection.streams.insert(id, entity);
             })
             .on_remove(|mut world, entity, _component_id| {

@@ -53,8 +53,20 @@ pub struct HandshakeDataReady(pub Entity);
 
 /// Marker component type for connection entities that have not yet been fully established
 /// (i.e. exposed to the user through [`Connecting`])
-#[derive(Debug, Component)]
+#[derive(Debug)]
 struct StillConnecting;
+
+impl Component for StillConnecting {
+    const STORAGE_TYPE: StorageType = StorageType::Table;
+
+    fn register_component_hooks(hooks: &mut ComponentHooks) {
+        hooks.on_insert(|mut world, entity, _component_id| {
+            // In case an established connection is replaced with a new connection,
+            // to prevent the new connection from being queried as though it were fully established
+            world.commands().entity(entity).remove::<FullyConnected>();
+        });
+    }
+}
 
 /// An in-progress connection attempt, that has not yet been fully established
 #[derive(Debug, QueryData)]
@@ -108,7 +120,7 @@ impl Component for FullyConnected {
     const STORAGE_TYPE: StorageType = StorageType::Table;
 
     fn register_component_hooks(hooks: &mut ComponentHooks) {
-        hooks.on_add(|mut world, entity, _component_id| {
+        hooks.on_insert(|mut world, entity, _component_id| {
             world.send_event(ConnectionEstablished(entity));
         });
     }
@@ -462,7 +474,7 @@ impl Component for ConnectionImpl {
     const STORAGE_TYPE: StorageType = StorageType::Table;
 
     fn register_component_hooks(hooks: &mut ComponentHooks) {
-        hooks.on_add(|mut world, entity, _component_id| {
+        hooks.on_insert(|mut world, entity, _component_id| {
             let connection = world.get::<ConnectionImpl>(entity).unwrap();
             let handle = connection.handle;
             let Some(mut endpoint) = world.get_mut::<EndpointImpl>(connection.endpoint) else {
@@ -735,7 +747,13 @@ pub(crate) fn poll_connections(
             Err(QueryEntityError::AliasedMutability(_)) => unreachable!(),
         };
 
-        if connection.is_drained() {
+        // If drained or the endpoint was replaced with a new one
+        if connection.is_drained()
+            || !endpoint
+                .endpoint
+                .connections
+                .contains_key(&connection.handle)
+        {
             if keepalive {
                 commands
                     .entity(entity)
