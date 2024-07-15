@@ -10,9 +10,9 @@ keywords = ["bevy", "quic", "gamedev", "networking"]
 categories = ["game-development", "network-programming"]
 
 [dependencies]
-bevy_app = { version = "0.14", default-features = false }
-bevy_ecs = { version = "0.14", default-features = false }
-bevy_time = { version = "0.14", default-features = false }
+bevy_app = { git = "https://github.com/Pixelstormer/bevy", branch = "fork-main", default-features = false }
+bevy_ecs = { git = "https://github.com/Pixelstormer/bevy", branch = "fork-main", default-features = false }
+bevy_time = { git = "https://github.com/Pixelstormer/bevy", branch = "fork-main", default-features = false }
 hashbrown = "0.14"
 bytes = "1.6"
 thiserror = "1.0"

@@ -483,7 +483,7 @@ impl Component for ConnectionImpl {
                 };
                 endpoint.connections.insert(handle, entity);
             })
-            .on_remove(|mut world, entity, _component_id| {
+            .on_replace(|mut world, entity, _component_id| {
                 let connection = world.get::<Self>(entity).unwrap();
                 for stream_entity in connection.streams.values().copied().collect::<Vec<_>>() {
                     if let Some(stream) = world.get_entity(stream_entity) {
