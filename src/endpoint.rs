@@ -46,8 +46,11 @@ impl EndpointBundle {
     /// Helper to construct an endpoint for use with incoming connections, using the default [`EndpointConfig`]
     ///
     /// Note that `local_addr` is the *local* address to bind to, which should usually be a wildcard
-    /// address like `0.0.0.0:0` or `[::]:0`, which allows communication with any reachable IPv4 or
-    /// IPv6 address respectively from an OS-assigned port.
+    /// address like `0.0.0.0` or `[::]` with a well-known, non-zero port number,
+    /// which allows communication with any reachable IPv4 or IPv6 address respectively.
+    ///
+    /// If the specified port number is 0, the OS will assign a random port number,
+    /// which you will need to somehow share with any clients that want to connect to the endpoint.
     ///
     /// Platform defaults for dual-stack sockets vary. For example, any socket bound to a wildcard
     /// IPv6 address on Windows will not by default be able to communicate with IPv4
@@ -60,8 +63,11 @@ impl EndpointBundle {
     /// Helper to construct an endpoint for use with both incoming and outgoing connections, using the default [`EndpointConfig`]
     ///
     /// Note that `local_addr` is the *local* address to bind to, which should usually be a wildcard
-    /// address like `0.0.0.0:0` or `[::]:0`, which allows communication with any reachable IPv4 or
-    /// IPv6 address respectively from an OS-assigned port.
+    /// address like `0.0.0.0` or `[::]` with a well-known, non-zero port number,
+    /// which allows communication with any reachable IPv4 or IPv6 address respectively.
+    ///
+    /// If the specified port number is 0, the OS will assign a random port number,
+    /// which you will need to somehow share with any clients that want to connect to the endpoint.
     ///
     /// Platform defaults for dual-stack sockets vary. For example, any socket bound to a wildcard
     /// IPv6 address on Windows will not by default be able to communicate with IPv4
