@@ -1,3 +1,6 @@
+//! Simple example showing how separate client and server applications can connect and talk to eachother.
+//! Run this example first in one terminal, then the `client` example in another terminal.
+
 use std::{net::Ipv6Addr, time::Duration};
 
 use bevy_app::{App, AppExit, ScheduleRunnerPlugin, Startup, Update};
@@ -27,6 +30,8 @@ fn main() -> AppExit {
 fn spawn_endpoint(mut commands: Commands) {
     let (cert, key) = init_crypto();
 
+    // Hardcoding the server port number allows you to do the same in the client app,
+    // removing the need to find some way of externally communicating it to clients
     commands.spawn(
         EndpointBundle::new_server(
             (Ipv6Addr::LOCALHOST, 4433).into(),
@@ -38,6 +43,12 @@ fn spawn_endpoint(mut commands: Commands) {
     println!("Listening for incoming connections...");
 }
 
+/// For the sake of this example, the server generates a self-signed certificate and writes it to disk
+/// at a well-known location, which is then read and trusted by the client for encryption.
+///
+/// In real applications, the client and server will be running on physically separate machines,
+/// so instead of this the server will have to use a certificate that is signed by a trusted certificate authority,
+/// or the client will have to implement either verification skipping (insecure!) or trust-on-first-use verification.
 fn init_crypto() -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) {
     let dirs = directories::ProjectDirs::from("org", "bevy_quicsilver", "bevy_quicsilver examples")
         .unwrap();

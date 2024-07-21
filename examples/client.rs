@@ -39,6 +39,12 @@ fn spawn_endpoint(mut commands: Commands) {
     );
 }
 
+/// For the sake of this example, the server generates a self-signed certificate and writes it to disk
+/// at a well-known location, which is then read and trusted by the client for encryption.
+///
+/// In real applications, the client and server will be running on physically separate machines,
+/// so instead of this the server will have to use a certificate that is signed by a trusted certificate authority,
+/// or the client will have to implement either verification skipping (insecure!) or trust-on-first-use verification.
 fn read_crypto() -> RootCertStore {
     let dirs = directories::ProjectDirs::from("org", "bevy_quicsilver", "bevy_quicsilver examples")
         .unwrap();
@@ -61,6 +67,8 @@ fn read_crypto() -> RootCertStore {
 
 fn connect_to_server(mut commands: Commands, mut endpoint: Query<Endpoint>) {
     let mut endpoint = endpoint.get_single_mut().unwrap();
+
+    // We know the server port number is hardcoded to 4433, so we can do the same here
     let connection = endpoint
         .connect(
             ("localhost", 4433)
