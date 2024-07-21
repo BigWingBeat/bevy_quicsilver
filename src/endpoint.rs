@@ -673,7 +673,7 @@ mod tests {
             $server_app.update();
 
             let events = $server_app.world().resource::<Events<NewIncoming>>();
-            let mut reader = events.get_reader();
+            let mut reader = events.get_cursor();
             let mut events = reader.read(events);
             let server_connection = events.next().unwrap().0;
             assert!(events.next().is_none());
@@ -716,7 +716,7 @@ mod tests {
         }};
     }
 
-    macro_rules! send_datagrams {
+    macro_rules! test_datagrams {
         ($client_app:ident, $server_app:ident, $client_connection_entity:ident, $server_connection_entity:ident) => {{
             // Confirm that the connections can send data to each other
             let mut client_connection = $client_app
@@ -800,7 +800,7 @@ mod tests {
             establish_connection!(app, app, endpoint_entity, endpoint_entity);
 
         let events = app.world().resource::<Events<ConnectionEstablished>>();
-        let mut reader = events.get_reader();
+        let mut reader = events.get_cursor();
         let mut events = reader.read(events);
 
         // One of these is for the client and the other is for the server, but we don't know which way round they are
@@ -812,7 +812,7 @@ mod tests {
                 || [conn_b, conn_a] == [client_connection, server_connection]
         );
 
-        send_datagrams!(app, app, client_connection, server_connection);
+        test_datagrams!(app, app, client_connection, server_connection);
     }
 
     #[test]
@@ -829,7 +829,7 @@ mod tests {
             establish_connection!(app, app, client_endpoint, server_endpoint);
 
         let events = app.world().resource::<Events<ConnectionEstablished>>();
-        let mut reader = events.get_reader();
+        let mut reader = events.get_cursor();
         let mut events = reader.read(events);
 
         // One of these is for the client and the other is for the server, but we don't know which way round they are
@@ -841,7 +841,7 @@ mod tests {
                 || [conn_b, conn_a] == [client_connection, server_connection]
         );
 
-        send_datagrams!(app, app, client_connection, server_connection);
+        test_datagrams!(app, app, client_connection, server_connection);
     }
 
     #[test]
@@ -862,7 +862,7 @@ mod tests {
         let events = client_app
             .world()
             .resource::<Events<ConnectionEstablished>>();
-        let mut reader = events.get_reader();
+        let mut reader = events.get_cursor();
         let mut events = reader.read(events);
         let connection_entity = events.next().unwrap().0;
         assert!(events.next().is_none());
@@ -871,12 +871,12 @@ mod tests {
         let events = server_app
             .world()
             .resource::<Events<ConnectionEstablished>>();
-        let mut reader = events.get_reader();
+        let mut reader = events.get_cursor();
         let mut events = reader.read(events);
         let connection_entity = events.next().unwrap().0;
         assert!(events.next().is_none());
         assert_eq!(connection_entity, server_connection);
 
-        send_datagrams!(client_app, server_app, client_connection, server_connection);
+        test_datagrams!(client_app, server_app, client_connection, server_connection);
     }
 }
