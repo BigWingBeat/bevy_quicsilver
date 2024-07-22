@@ -2,7 +2,7 @@ use bevy_ecs::{
     bundle::Bundle,
     component::{Component, ComponentHooks, StorageType},
     entity::Entity,
-    query::QueryEntityError,
+    query::{QueryEntityError, QuerySingleError},
     system::{Query, SystemParam},
 };
 use bytes::Bytes;
@@ -29,12 +29,40 @@ impl Streams<'_, '_> {
         Ok(SendStream::new(connection, stream))
     }
 
+    /// Returns a single [`SendStream`] when there is exactly one.
+    ///
+    /// If the number of [`SendStream`]s is not exactly one, a [`QuerySingleError`] is returned instead.
+    pub fn send_stream_single(&mut self) -> Result<SendStream<'_>, QuerySingleError> {
+        let stream = self.send_stream.get_single_mut()?.into_inner();
+        let connection = self
+            .connection
+            .get_mut(stream.connection)
+            .map_err(|_| QuerySingleError::NoEntities(""))?
+            .into_inner();
+        connection.should_poll = true;
+        Ok(SendStream::new(connection, stream))
+    }
+
     /// Returns the [`RecvStream`] for the given entity
     ///
     /// [`RecvStream`]: quinn_proto::RecvStream
     pub fn recv_stream(&mut self, entity: Entity) -> Result<RecvStream<'_>, QueryEntityError> {
         let stream = self.recv_stream.get_mut(entity)?.into_inner();
         let connection = self.connection.get_mut(stream.connection)?.into_inner();
+        connection.should_poll = true;
+        Ok(RecvStream::new(connection, stream))
+    }
+
+    /// Returns a single [`RecvStream`] when there is exactly one.
+    ///
+    /// If the number of [`RecvStream`]s is not exactly one, a [`QuerySingleError`] is returned instead.
+    pub fn recv_stream_single(&mut self) -> Result<RecvStream<'_>, QuerySingleError> {
+        let stream = self.recv_stream.get_single_mut()?.into_inner();
+        let connection = self
+            .connection
+            .get_mut(stream.connection)
+            .map_err(|_| QuerySingleError::NoEntities(""))?
+            .into_inner();
         connection.should_poll = true;
         Ok(RecvStream::new(connection, stream))
     }
