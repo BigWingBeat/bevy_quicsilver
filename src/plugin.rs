@@ -6,7 +6,7 @@ use crate::{
     connection::{poll_connections, ConnectionEstablished, HandshakeDataReady},
     endpoint::poll_endpoints,
     incoming::handle_incoming_responses,
-    EntityError, IncomingResponse, NewIncoming,
+    IncomingResponse, NewIncoming,
 };
 
 #[derive(Debug)]
@@ -20,7 +20,6 @@ impl Plugin for QuicPlugin {
 
         app.add_event::<NewIncoming>()
             .add_event::<IncomingResponse>()
-            .add_event::<EntityError>()
             .add_event::<ConnectionEstablished>()
             .add_event::<HandshakeDataReady>()
             .add_systems(

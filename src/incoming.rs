@@ -16,7 +16,7 @@ use quinn_proto::ServerConfig;
 use crate::{
     connection::{ConnectingBundle, ConnectionImpl},
     endpoint::Endpoint,
-    EntityError, ErrorKind, KeepAlive,
+    KeepAlive,
 };
 
 /// Event raised whenever an endpoint receives a new incoming client connection.

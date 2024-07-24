@@ -10,15 +10,14 @@ use bevy_ecs::{
 };
 use hashbrown::HashMap;
 use quinn_proto::{
-    AcceptError, ClientConfig, ConnectError, ConnectionEvent, ConnectionHandle, DatagramEvent,
-    EndpointConfig, EndpointEvent, ServerConfig,
+    AcceptError, ClientConfig, ConnectError, ConnectionError, ConnectionEvent, ConnectionHandle,
+    DatagramEvent, EndpointConfig, EndpointEvent, RetryError, ServerConfig,
 };
 
 use crate::{
     connection::{ConnectingBundle, ConnectionImpl},
     incoming::Incoming,
     socket::UdpSocket,
-    EntityError, Error, ErrorKind,
 };
 
 /// A bundle for adding an [`Endpoint`] to an entity
@@ -39,7 +38,7 @@ impl EndpointBundle {
     pub fn new_client(
         local_addr: SocketAddr,
         default_client_config: Option<ClientConfig>,
-    ) -> Result<Self, Error> {
+    ) -> std::io::Result<Self> {
         EndpointImpl::new_client(local_addr, default_client_config).map(Self)
     }
 
@@ -56,7 +55,10 @@ impl EndpointBundle {
     /// IPv6 address on Windows will not by default be able to communicate with IPv4
     /// addresses. Portable applications should bind an address that matches the family they wish to
     /// communicate within.
-    pub fn new_server(local_addr: SocketAddr, server_config: ServerConfig) -> Result<Self, Error> {
+    pub fn new_server(
+        local_addr: SocketAddr,
+        server_config: ServerConfig,
+    ) -> std::io::Result<Self> {
         EndpointImpl::new_server(local_addr, server_config).map(Self)
     }
 
@@ -77,7 +79,7 @@ impl EndpointBundle {
         local_addr: SocketAddr,
         default_client_config: ClientConfig,
         server_config: ServerConfig,
-    ) -> Result<Self, Error> {
+    ) -> std::io::Result<Self> {
         EndpointImpl::new_client_host(local_addr, default_client_config, server_config).map(Self)
     }
 
@@ -88,7 +90,7 @@ impl EndpointBundle {
         default_client_config: Option<ClientConfig>,
         server_config: Option<ServerConfig>,
         rng_seed: Option<[u8; 32]>,
-    ) -> Result<Self, Error> {
+    ) -> std::io::Result<Self> {
         EndpointImpl::new(
             socket,
             config,
@@ -159,7 +161,7 @@ impl EndpointItem<'_> {
         &mut self,
         server_address: SocketAddr,
         server_name: &str,
-    ) -> Result<ConnectingBundle, Error> {
+    ) -> Result<ConnectingBundle, ConnectError> {
         self.endpoint
             .connect(self.entity, server_address, server_name)
     }
@@ -176,7 +178,7 @@ impl EndpointItem<'_> {
         server_address: SocketAddr,
         server_name: &str,
         client_config: ClientConfig,
-    ) -> Result<ConnectingBundle, Error> {
+    ) -> Result<ConnectingBundle, ConnectError> {
         self.endpoint
             .connect_with(self.entity, server_address, server_name, client_config)
     }
@@ -185,7 +187,7 @@ impl EndpointItem<'_> {
         &mut self,
         incoming: quinn_proto::Incoming,
         server_config: Option<Arc<ServerConfig>>,
-    ) -> Result<(ConnectionHandle, quinn_proto::Connection), Error> {
+    ) -> Result<(ConnectionHandle, quinn_proto::Connection), ConnectionError> {
         self.endpoint.accept(incoming, server_config)
     }
 
@@ -193,7 +195,7 @@ impl EndpointItem<'_> {
         self.endpoint.refuse(incoming)
     }
 
-    pub(crate) fn retry(&mut self, incoming: quinn_proto::Incoming) -> Result<(), Error> {
+    pub(crate) fn retry(&mut self, incoming: quinn_proto::Incoming) -> Result<(), RetryError> {
         self.endpoint.retry(incoming)
     }
 
@@ -230,7 +232,7 @@ impl EndpointItem<'_> {
         &self,
         transmit: &quinn_proto::Transmit,
         buffer: &[u8],
-    ) -> Result<(), std::io::Error> {
+    ) -> std::io::Result<()> {
         self.endpoint.send(transmit, buffer)
     }
 }
@@ -255,7 +257,7 @@ impl EndpointReadOnlyItem<'_> {
         &self,
         transmit: &quinn_proto::Transmit,
         buffer: &[u8],
-    ) -> Result<(), std::io::Error> {
+    ) -> std::io::Result<()> {
         self.endpoint.send(transmit, buffer)
     }
 }
@@ -273,50 +275,44 @@ impl EndpointImpl {
     fn new_client(
         local_addr: SocketAddr,
         default_client_config: Option<ClientConfig>,
-    ) -> Result<Self, Error> {
-        std::net::UdpSocket::bind(local_addr)
-            .map_err(Into::into)
-            .and_then(|socket| {
-                Self::new(
-                    socket,
-                    EndpointConfig::default(),
-                    default_client_config,
-                    None,
-                    None,
-                )
-            })
+    ) -> std::io::Result<Self> {
+        std::net::UdpSocket::bind(local_addr).and_then(|socket| {
+            Self::new(
+                socket,
+                EndpointConfig::default(),
+                default_client_config,
+                None,
+                None,
+            )
+        })
     }
 
-    fn new_server(local_addr: SocketAddr, server_config: ServerConfig) -> Result<Self, Error> {
-        std::net::UdpSocket::bind(local_addr)
-            .map_err(Into::into)
-            .and_then(|socket| {
-                Self::new(
-                    socket,
-                    EndpointConfig::default(),
-                    None,
-                    Some(server_config),
-                    None,
-                )
-            })
+    fn new_server(local_addr: SocketAddr, server_config: ServerConfig) -> std::io::Result<Self> {
+        std::net::UdpSocket::bind(local_addr).and_then(|socket| {
+            Self::new(
+                socket,
+                EndpointConfig::default(),
+                None,
+                Some(server_config),
+                None,
+            )
+        })
     }
 
     fn new_client_host(
         local_addr: SocketAddr,
         default_client_config: ClientConfig,
         server_config: ServerConfig,
-    ) -> Result<Self, Error> {
-        std::net::UdpSocket::bind(local_addr)
-            .map_err(Into::into)
-            .and_then(|socket| {
-                Self::new(
-                    socket,
-                    EndpointConfig::default(),
-                    Some(default_client_config),
-                    Some(server_config),
-                    None,
-                )
-            })
+    ) -> std::io::Result<Self> {
+        std::net::UdpSocket::bind(local_addr).and_then(|socket| {
+            Self::new(
+                socket,
+                EndpointConfig::default(),
+                Some(default_client_config),
+                Some(server_config),
+                None,
+            )
+        })
     }
 
     fn new(
@@ -325,20 +321,18 @@ impl EndpointImpl {
         default_client_config: Option<ClientConfig>,
         server_config: Option<ServerConfig>,
         rng_seed: Option<[u8; 32]>,
-    ) -> Result<Self, Error> {
-        UdpSocket::new(socket, config.get_max_udp_payload_size())
-            .map(|socket| Self {
-                endpoint: quinn_proto::Endpoint::new(
-                    Arc::new(config),
-                    server_config.map(Arc::new),
-                    !socket.may_fragment(),
-                    rng_seed,
-                ),
-                default_client_config,
-                connections: HashMap::default(),
-                socket,
-            })
-            .map_err(Into::into)
+    ) -> std::io::Result<Self> {
+        UdpSocket::new(socket, config.get_max_udp_payload_size()).map(|socket| Self {
+            endpoint: quinn_proto::Endpoint::new(
+                Arc::new(config),
+                server_config.map(Arc::new),
+                !socket.may_fragment(),
+                rng_seed,
+            ),
+            default_client_config,
+            connections: HashMap::default(),
+            socket,
+        })
     }
 
     pub(crate) fn handle_event(
@@ -354,10 +348,10 @@ impl EndpointImpl {
         self_entity: Entity,
         server_address: SocketAddr,
         server_name: &str,
-    ) -> Result<ConnectingBundle, Error> {
+    ) -> Result<ConnectingBundle, ConnectError> {
         self.default_client_config
             .clone()
-            .ok_or(ConnectError::NoDefaultClientConfig.into())
+            .ok_or(ConnectError::NoDefaultClientConfig)
             .and_then(|client_config| {
                 self.connect_with(self_entity, server_address, server_name, client_config)
             })
@@ -369,12 +363,11 @@ impl EndpointImpl {
         server_address: SocketAddr,
         server_name: &str,
         client_config: ClientConfig,
-    ) -> Result<ConnectingBundle, Error> {
+    ) -> Result<ConnectingBundle, ConnectError> {
         let now = Instant::now();
         // TODO: Why https://github.com/quinn-rs/quinn/blob/0.10.2/quinn/src/endpoint.rs#L185-L192
         self.endpoint
             .connect(now, client_config, server_address, server_name)
-            .map_err(Into::into)
             .map(|(handle, connection)| {
                 ConnectingBundle::new(ConnectionImpl::new(self_entity, handle, connection))
             })
@@ -384,7 +377,7 @@ impl EndpointImpl {
         &mut self,
         incoming: quinn_proto::Incoming,
         server_config: Option<Arc<ServerConfig>>,
-    ) -> Result<(ConnectionHandle, quinn_proto::Connection), Error> {
+    ) -> Result<(ConnectionHandle, quinn_proto::Connection), ConnectionError> {
         let mut response_buffer = Vec::new();
         self.endpoint
             .accept(
@@ -397,7 +390,7 @@ impl EndpointImpl {
                 if let Some(response) = response {
                     self.send_response(&response, &response_buffer);
                 }
-                cause.into()
+                cause
             })
     }
 
@@ -407,12 +400,11 @@ impl EndpointImpl {
         self.send_response(&transmit, &response_buffer);
     }
 
-    fn retry(&mut self, incoming: quinn_proto::Incoming) -> Result<(), Error> {
+    fn retry(&mut self, incoming: quinn_proto::Incoming) -> Result<(), RetryError> {
         let mut response_buffer = Vec::new();
         self.endpoint
             .retry(incoming, &mut response_buffer)
             .map(|transmit| self.send_response(&transmit, &response_buffer))
-            .map_err(Into::into)
     }
 
     fn ignore(&mut self, incoming: quinn_proto::Incoming) {
@@ -429,7 +421,7 @@ impl EndpointImpl {
         &self,
         transmit: &quinn_proto::Transmit,
         buffer: &[u8],
-    ) -> Result<(), std::io::Error> {
+    ) -> std::io::Result<()> {
         self.socket.send(&udp_transmit(transmit, buffer))
     }
 
@@ -585,7 +577,7 @@ mod tests {
         connection::{Connecting, Connection, ConnectionEstablished},
         incoming::NewIncoming,
         plugin::QuicPlugin,
-        EntityError, Incoming, IncomingResponse,
+        Incoming, IncomingResponse,
     };
 
     use super::{Endpoint, EndpointBundle};

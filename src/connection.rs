@@ -10,14 +10,14 @@ use bevy_time::{Real, Time, Timer, TimerMode};
 use bytes::Bytes;
 use hashbrown::HashMap;
 use quinn_proto::{
-    congestion::Controller, ConnectionHandle, ConnectionStats, Dir, EndpointEvent, Event,
-    SendDatagramError, StreamEvent, StreamId, Transmit, VarInt,
+    congestion::Controller, crypto::ExportKeyingMaterialError, ConnectionHandle, ConnectionStats,
+    Dir, EndpointEvent, Event, SendDatagramError, StreamEvent, StreamId, Transmit, VarInt,
 };
 
 use crate::{
     endpoint::{Endpoint, EndpointImpl},
     streams::{RecvStreamBundle, SendStreamBundle, SendStreamImpl},
-    EntityError, Error, KeepAlive,
+    KeepAlive,
 };
 
 use std::{
@@ -227,7 +227,7 @@ impl ConnectionItem<'_> {
     ///
     /// Previously queued datagrams which are still unsent may be discarded to make space for this datagram,
     /// in order of oldest to newest.
-    pub fn send_datagram(&mut self, data: Bytes) -> Result<(), Error> {
+    pub fn send_datagram(&mut self, data: Bytes) -> Result<(), SendDatagramError> {
         self.connection.send_datagram(data)
     }
 
@@ -239,7 +239,7 @@ impl ConnectionItem<'_> {
     /// See [`send_datagram()`] for details.
     ///
     /// [`send_datagram()`]: Connection::send_datagram
-    pub fn send_datagram_wait(&mut self, data: Bytes) -> Result<(), Error> {
+    pub fn send_datagram_wait(&mut self, data: Bytes) -> Result<(), SendDatagramError> {
         self.connection.send_datagram_wait(data)
     }
 
@@ -341,7 +341,7 @@ impl ConnectionItem<'_> {
         output: &mut [u8],
         label: &[u8],
         context: &[u8],
-    ) -> Result<(), quinn_proto::crypto::ExportKeyingMaterialError> {
+    ) -> Result<(), ExportKeyingMaterialError> {
         self.connection
             .export_keying_material(output, label, context)
     }
@@ -449,7 +449,7 @@ impl ConnectionReadOnlyItem<'_> {
         output: &mut [u8],
         label: &[u8],
         context: &[u8],
-    ) -> Result<(), quinn_proto::crypto::ExportKeyingMaterialError> {
+    ) -> Result<(), ExportKeyingMaterialError> {
         self.connection
             .export_keying_material(output, label, context)
     }
@@ -574,15 +574,12 @@ impl ConnectionImpl {
         self.connection.recv_stream(id)
     }
 
-    fn send_datagram(&mut self, data: Bytes) -> Result<(), Error> {
+    fn send_datagram(&mut self, data: Bytes) -> Result<(), SendDatagramError> {
         self.should_poll = true;
-        self.connection
-            .datagrams()
-            .send(data, true)
-            .map_err(Into::into)
+        self.connection.datagrams().send(data, true)
     }
 
-    fn send_datagram_wait(&mut self, data: Bytes) -> Result<(), Error> {
+    fn send_datagram_wait(&mut self, data: Bytes) -> Result<(), SendDatagramError> {
         self.should_poll = true;
         self.connection
             .datagrams()
@@ -592,7 +589,7 @@ impl ConnectionImpl {
                     self.pending_datagrams.push(data);
                     Ok(())
                 }
-                _ => Err(error.into()),
+                e => Err(e),
             })
     }
 
@@ -642,7 +639,7 @@ impl ConnectionImpl {
         output: &mut [u8],
         label: &[u8],
         context: &[u8],
-    ) -> Result<(), quinn_proto::crypto::ExportKeyingMaterialError> {
+    ) -> Result<(), ExportKeyingMaterialError> {
         self.connection
             .crypto_session()
             .export_keying_material(output, label, context)
