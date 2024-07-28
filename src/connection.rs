@@ -10,8 +10,9 @@ use bevy_time::{Real, Time, Timer, TimerMode};
 use bytes::Bytes;
 use hashbrown::HashMap;
 use quinn_proto::{
-    congestion::Controller, crypto::ExportKeyingMaterialError, ConnectionHandle, ConnectionStats,
-    Dir, EndpointEvent, Event, SendDatagramError, StreamEvent, StreamId, Transmit, VarInt,
+    congestion::Controller, crypto::ExportKeyingMaterialError, ConnectionError, ConnectionHandle,
+    ConnectionStats, Dir, EndpointEvent, Event, SendDatagramError, StreamEvent, StreamId, Transmit,
+    VarInt,
 };
 
 use crate::{
@@ -25,6 +26,49 @@ use std::{
     net::{IpAddr, SocketAddr},
     time::{Duration, Instant},
 };
+
+/// An event that is raised whenever something of significance happens to a connection
+#[derive(Debug, bevy_ecs::event::Event)]
+pub struct ConnectionEvent {
+    /// The `Connecting` or `Connection` entity that the event happened to
+    pub connection: Entity,
+    /// The type of event that occurred
+    pub event: ConnectionEventType,
+}
+
+impl ConnectionEvent {
+    fn established(connection: Entity) -> Self {
+        Self {
+            connection,
+            event: ConnectionEventType::Established,
+        }
+    }
+
+    fn lost(connection: Entity, error: ConnectionError) -> Self {
+        Self {
+            connection,
+            event: ConnectionEventType::Lost(error),
+        }
+    }
+
+    fn io_error(connection: Entity, error: std::io::Error) -> Self {
+        Self {
+            connection,
+            event: ConnectionEventType::IoError(error),
+        }
+    }
+}
+
+/// The type of event that happened to a connection whenever a [`ConnectionEvent`] is raised
+#[derive(Debug)]
+pub enum ConnectionEventType {
+    /// The connection was successfully established, turning it from a [`Connecting`] entity to a [`Connection`] entity
+    Established,
+    /// The connection was lost
+    Lost(ConnectionError),
+    /// The connection has been aborted due to an I/O error
+    IoError(std::io::Error),
+}
 
 /// A bundle for adding a new connection to an entity
 #[derive(Debug, Bundle)]
@@ -41,10 +85,6 @@ impl ConnectingBundle {
         }
     }
 }
-
-/// Event raised whenever a [`Connecting`] entity finishes establishing the connection, turning into a [`Connection`] entity
-#[derive(Debug, bevy_ecs::event::Event)]
-pub struct ConnectionEstablished(pub Entity);
 
 /// Event raised when a [`Connecting`] entity's handshake data becomes available.
 /// After this event is raised, [`Connecting::handshake_data()`] will begin returning [`Some`]
@@ -121,7 +161,7 @@ impl Component for FullyConnected {
 
     fn register_component_hooks(hooks: &mut ComponentHooks) {
         hooks.on_insert(|mut world, entity, _component_id| {
-            world.send_event(ConnectionEstablished(entity));
+            world.send_event(ConnectionEvent::established(entity));
         });
     }
 }
@@ -737,8 +777,8 @@ pub(crate) fn poll_connections(
     mut query: Query<(Entity, &mut ConnectionImpl, Has<KeepAlive>)>,
     mut stream_query: Query<&mut SendStreamImpl>,
     mut endpoint: Query<Endpoint>,
+    mut connection_events: EventWriter<ConnectionEvent>,
     mut handshake_events: EventWriter<HandshakeDataReady>,
-    mut error_events: EventWriter<EntityError>,
     time: Res<Time<Real>>,
 ) {
     let now = Instant::now();
@@ -807,7 +847,7 @@ pub(crate) fn poll_connections(
                     }
                     Err(error) => {
                         // I/O error
-                        error_events.send(EntityError::new(entity, error));
+                        connection_events.send(ConnectionEvent::io_error(entity, error));
                         connection.close(now, 0u32.into(), "I/O Error".into());
                         connection.io_error = true;
                         io_error = true;
@@ -838,7 +878,7 @@ pub(crate) fn poll_connections(
                             .insert(FullyConnected);
                     }
                     Event::ConnectionLost { reason } => {
-                        error_events.send(EntityError::new(entity, reason));
+                        connection_events.send(ConnectionEvent::lost(entity, reason));
                     }
                     Event::Stream(StreamEvent::Opened { dir }) => todo!(),
                     Event::Stream(StreamEvent::Readable { id }) => todo!(),

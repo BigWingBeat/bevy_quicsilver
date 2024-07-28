@@ -4,7 +4,7 @@ use bevy_ecs::{
     bundle::Bundle,
     component::Component,
     entity::Entity,
-    event::EventWriter,
+    event::{Event, EventWriter},
     query::{QueryData, QueryEntityError},
     system::{Commands, Query},
 };
@@ -13,12 +13,59 @@ use quinn_proto::{
     AcceptError, ClientConfig, ConnectError, ConnectionError, ConnectionEvent, ConnectionHandle,
     DatagramEvent, EndpointConfig, EndpointEvent, RetryError, ServerConfig,
 };
+use thiserror::Error;
 
 use crate::{
     connection::{ConnectingBundle, ConnectionImpl},
     incoming::Incoming,
     socket::UdpSocket,
 };
+
+/// An event that is raised when an endpoint encounters an error
+#[derive(Debug, Event)]
+pub struct EndpointError {
+    /// The endpoint entity that the error happened to
+    pub endpoint: Entity,
+    /// The type of error that occurred
+    pub error: EndpointErrorType,
+}
+
+impl EndpointError {
+    fn malformed_connection_entity(endpoint: Entity, connection: Entity) -> Self {
+        Self {
+            endpoint,
+            error: EndpointErrorType::MalformedConnectionEntity(connection),
+        }
+    }
+
+    fn missing_connection_entity(endpoint: Entity, connection: Entity) -> Self {
+        Self {
+            endpoint,
+            error: EndpointErrorType::MissingConnectionEntity(connection),
+        }
+    }
+
+    fn io_error(endpoint: Entity, error: std::io::Error) -> Self {
+        Self {
+            endpoint,
+            error: EndpointErrorType::IoError(error),
+        }
+    }
+}
+
+/// The type of error that happened to an endpoint whenever an [`EndpointError`] is raised
+#[derive(Debug, Error)]
+pub enum EndpointErrorType {
+    /// A connection entity has had its connection component(s) unexpectedly removed
+    #[error("Entity {0} does not have connection components")]
+    MalformedConnectionEntity(Entity),
+    /// A connection entity has been unexpectedly despawned
+    #[error("Entity {0} does not exist")]
+    MissingConnectionEntity(Entity),
+    /// The endpoint has been aborted due to an I/O error
+    #[error(transparent)]
+    IoError(std::io::Error),
+}
 
 /// A bundle for adding an [`Endpoint`] to an entity
 #[derive(Debug, Bundle)]
@@ -454,7 +501,7 @@ pub(crate) fn poll_endpoints(
     mut commands: Commands,
     mut endpoint_query: Query<Endpoint>,
     mut connection_query: Query<(Entity, &mut ConnectionImpl)>,
-    mut error_events: EventWriter<EntityError>,
+    mut error_events: EventWriter<EndpointError>,
 ) {
     let now = Instant::now();
     for EndpointItem {
@@ -498,14 +545,17 @@ pub(crate) fn poll_endpoints(
                         }
                         Err(QueryEntityError::QueryDoesNotMatch(entity)) => {
                             endpoint.handle_event(handle, EndpointEvent::drained());
-                            error_events.send(EntityError::new(
+                            error_events.send(EndpointError::malformed_connection_entity(
                                 entity,
-                                ErrorKind::missing_component::<ConnectionImpl>(),
+                                connection_entity,
                             ));
                         }
                         Err(QueryEntityError::NoSuchEntity(entity)) => {
                             endpoint.handle_event(handle, EndpointEvent::drained());
-                            error_events.send(EntityError::new(entity, ErrorKind::NoSuchEntity));
+                            error_events.send(EndpointError::missing_connection_entity(
+                                entity,
+                                connection_entity,
+                            ));
                         }
                         Err(QueryEntityError::AliasedMutability(_)) => unreachable!(),
                     }
@@ -522,7 +572,8 @@ pub(crate) fn poll_endpoints(
                 None => {}
             }
         }) {
-            error_events.send(EntityError::new(entity, error));
+            // TODO: kill endpoint on I/O error
+            error_events.send(EndpointError::io_error(entity, error));
         }
 
         for (transmit, buffer) in transmits {
@@ -574,15 +625,15 @@ mod tests {
     use rustls::{pki_types::PrivateKeyDer, RootCertStore};
 
     use crate::{
-        connection::{Connecting, Connection, ConnectionEstablished},
+        connection::{Connecting, Connection, ConnectionEvent, ConnectionEventType},
         incoming::NewIncoming,
         plugin::QuicPlugin,
         Incoming, IncomingResponse,
     };
 
-    use super::{Endpoint, EndpointBundle};
+    use super::{Endpoint, EndpointBundle, EndpointError};
 
-    fn panic_on_error_event(mut errors: EventReader<EntityError>) {
+    fn panic_on_error_event(mut errors: EventReader<EndpointError>) {
         if errors.is_empty() {
             return;
         }
@@ -591,7 +642,7 @@ mod tests {
         panic_string.extend(
             errors
                 .read()
-                .map(|error| format!("\n    entity {:?}: {}", error.entity, error.error)),
+                .map(|error| format!("\n    entity {:?}: {}", error.endpoint, error.error)),
         );
 
         panic!("{}", panic_string);
@@ -797,14 +848,20 @@ mod tests {
         let (client_connection, server_connection) =
             establish_connection!(app, app, endpoint_entity, endpoint_entity);
 
-        let events = app.world().resource::<Events<ConnectionEstablished>>();
+        let events = app.world().resource::<Events<ConnectionEvent>>();
         let mut reader = events.get_cursor();
         let mut events = reader.read(events);
 
         // One of these is for the client and the other is for the server, but we don't know which way round they are
-        let conn_a = events.next().unwrap().0;
-        let conn_b = events.next().unwrap().0;
+        let conn_a = events.next().unwrap();
+        let conn_b = events.next().unwrap();
+
+        assert!(matches!(conn_a.event, ConnectionEventType::Established));
+        assert!(matches!(conn_b.event, ConnectionEventType::Established));
         assert!(events.next().is_none());
+
+        let conn_a = conn_a.connection;
+        let conn_b = conn_b.connection;
         assert!(
             [conn_a, conn_b] == [client_connection, server_connection]
                 || [conn_b, conn_a] == [client_connection, server_connection]
@@ -826,14 +883,20 @@ mod tests {
         let (client_connection, server_connection) =
             establish_connection!(app, app, client_endpoint, server_endpoint);
 
-        let events = app.world().resource::<Events<ConnectionEstablished>>();
+        let events = app.world().resource::<Events<ConnectionEvent>>();
         let mut reader = events.get_cursor();
         let mut events = reader.read(events);
 
         // One of these is for the client and the other is for the server, but we don't know which way round they are
-        let conn_a = events.next().unwrap().0;
-        let conn_b = events.next().unwrap().0;
+        let conn_a = events.next().unwrap();
+        let conn_b = events.next().unwrap();
+
+        assert!(matches!(conn_a.event, ConnectionEventType::Established));
+        assert!(matches!(conn_b.event, ConnectionEventType::Established));
         assert!(events.next().is_none());
+
+        let conn_a = conn_a.connection;
+        let conn_b = conn_b.connection;
         assert!(
             [conn_a, conn_b] == [client_connection, server_connection]
                 || [conn_b, conn_a] == [client_connection, server_connection]
@@ -857,22 +920,30 @@ mod tests {
             establish_connection!(client_app, server_app, client_endpoint, server_endpoint);
 
         // Each app should have 1 connection established event
-        let events = client_app
-            .world()
-            .resource::<Events<ConnectionEstablished>>();
+        let events = client_app.world().resource::<Events<ConnectionEvent>>();
         let mut reader = events.get_cursor();
         let mut events = reader.read(events);
-        let connection_entity = events.next().unwrap().0;
+        let connection_event = events.next().unwrap();
+        assert!(matches!(
+            connection_event.event,
+            ConnectionEventType::Established
+        ));
         assert!(events.next().is_none());
+
+        let connection_entity = connection_event.connection;
         assert_eq!(connection_entity, client_connection);
 
-        let events = server_app
-            .world()
-            .resource::<Events<ConnectionEstablished>>();
+        let events = server_app.world().resource::<Events<ConnectionEvent>>();
         let mut reader = events.get_cursor();
         let mut events = reader.read(events);
-        let connection_entity = events.next().unwrap().0;
+        let connection_event = events.next().unwrap();
+        assert!(matches!(
+            connection_event.event,
+            ConnectionEventType::Established
+        ));
         assert!(events.next().is_none());
+
+        let connection_entity = connection_event.connection;
         assert_eq!(connection_entity, server_connection);
 
         test_datagrams!(client_app, server_app, client_connection, server_connection);

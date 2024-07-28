@@ -1,11 +1,7 @@
 #![doc(test(attr(deny(warnings))))]
 #![doc = include_str!("../README.md")]
 
-use bevy_ecs::{component::Component, entity::Entity, event::Event};
-use quinn_proto::{
-    ConnectError, ConnectionError, ReadError, RetryError, SendDatagramError, WriteError,
-};
-use thiserror::Error;
+use bevy_ecs::component::Component;
 
 pub use quinn_proto::{ClientConfig, ServerConfig};
 

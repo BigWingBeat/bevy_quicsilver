@@ -11,13 +11,71 @@ use bevy_ecs::{
     system::SystemState,
     world::World,
 };
-use quinn_proto::ServerConfig;
+use quinn_proto::{ConnectionError, ServerConfig};
+use thiserror::Error;
 
 use crate::{
     connection::{ConnectingBundle, ConnectionImpl},
     endpoint::Endpoint,
     KeepAlive,
 };
+
+/// An event that is raised whenever an [`Incoming`] entity encounters an error
+#[derive(Debug, Event)]
+pub struct IncomingError {
+    /// The entity that the error occurred to
+    pub incoming: Entity,
+    /// The type of error that occurred
+    pub error: IncomingErrorType,
+}
+
+impl IncomingError {
+    fn malformed_entity(incoming: Entity) -> Self {
+        Self {
+            incoming,
+            error: IncomingErrorType::MalformedEntity,
+        }
+    }
+
+    fn missing_entity(incoming: Entity) -> Self {
+        Self {
+            incoming,
+            error: IncomingErrorType::MissingEntity,
+        }
+    }
+
+    fn accept_error(incoming: Entity, error: ConnectionError) -> Self {
+        Self {
+            incoming,
+            error: IncomingErrorType::AcceptError(error),
+        }
+    }
+
+    fn retry_error(incoming: Entity) -> Self {
+        Self {
+            incoming,
+            error: IncomingErrorType::RetryError,
+        }
+    }
+}
+
+/// The type of error that occurred whenever an [`IncomingError`] is raised
+#[derive(Debug, Error)]
+pub enum IncomingErrorType {
+    /// An [`IncomingResponse`] event was raised for an entity that does not have an [`Incoming`] component
+    #[error("The entity does not have an {} component", std::any::type_name::<Incoming>())]
+    MalformedEntity,
+    /// An [`IncomingResponse`] event was raised for an entity that does not exist
+    #[error("The entity does not exist")]
+    MissingEntity,
+    /// An error occurred when attempting to accept the connection
+    #[error(transparent)]
+    AcceptError(ConnectionError),
+    /// Attempted to retry an [`Incoming`] which already bears an address
+    /// validation token from a previous retry
+    #[error("Attempted to retry a client which already bears an address validation token from a previous retry")]
+    RetryError,
+}
 
 /// Event raised whenever an endpoint receives a new incoming client connection.
 /// The specified entity will have an [`Incoming`] component
@@ -164,7 +222,7 @@ pub(crate) fn handle_incoming_responses(
     world: &mut World,
     endpoints: &mut QueryState<Endpoint>,
     response_events: &mut SystemState<EventReader<IncomingResponse>>,
-    error_events: &mut SystemState<EventWriter<EntityError>>,
+    error_events: &mut SystemState<EventWriter<IncomingError>>,
 ) {
     let responses = response_events
         .get_mut(world)
@@ -176,17 +234,16 @@ pub(crate) fn handle_incoming_responses(
         let Some(mut incoming_entity) = world.get_entity_mut(response.entity) else {
             error_events
                 .get_mut(world)
-                .send(EntityError::new(response.entity, ErrorKind::NoSuchEntity));
+                .send(IncomingError::missing_entity(response.entity));
             continue;
         };
 
         let incoming_entity_id = incoming_entity.id();
 
         let Some(incoming) = incoming_entity.take::<Incoming>() else {
-            error_events.get_mut(world).send(EntityError::new(
-                incoming_entity_id,
-                ErrorKind::missing_component::<Incoming>(),
-            ));
+            error_events
+                .get_mut(world)
+                .send(IncomingError::malformed_entity(incoming_entity_id));
             continue;
         };
 
@@ -202,12 +259,18 @@ pub(crate) fn handle_incoming_responses(
             };
 
             match response.response {
-                IncomingResponseType::Accept(config) => endpoint.accept(incoming, config).map(Some),
+                IncomingResponseType::Accept(config) => endpoint
+                    .accept(incoming, config)
+                    .map(Some)
+                    .map_err(|error| IncomingError::accept_error(incoming_entity_id, error)),
                 IncomingResponseType::Refuse => {
                     endpoint.refuse(incoming);
                     Ok(None)
                 }
-                IncomingResponseType::Retry => endpoint.retry(incoming).map(|_| None),
+                IncomingResponseType::Retry => endpoint
+                    .retry(incoming)
+                    .map(|_| None)
+                    .map_err(|_| IncomingError::retry_error(incoming_entity_id)),
                 IncomingResponseType::Ignore => {
                     endpoint.ignore(incoming);
                     Ok(None)
@@ -231,9 +294,7 @@ pub(crate) fn handle_incoming_responses(
                 }
             }
             Err(error) => {
-                error_events
-                    .get_mut(world)
-                    .send(EntityError::new(incoming_entity_id, error));
+                error_events.get_mut(world).send(error);
             }
         }
     }
