@@ -8,22 +8,49 @@ use bevy_app::{App, AppExit, ScheduleRunnerPlugin, Startup, Update};
 use bevy_ecs::{
     event::EventReader,
     schedule::IntoSystemConfigs,
-    system::{Commands, Query},
+    system::{Commands, Query, Res, ResMut, Resource},
 };
 use bevy_quicsilver::{
-    connection::ConnectionEstablished, endpoint::EndpointBundle, Endpoint, EntityError, QuicPlugin,
+    connection::{Connection, ConnectionEvent, ConnectionEventType},
+    endpoint::EndpointBundle,
+    Endpoint, QuicPlugin,
 };
-use quinn_proto::ClientConfig;
+use bevy_state::{
+    app::{AppExtStates, StatesPlugin},
+    prelude::in_state,
+    state::{NextState, States},
+};
+use quinn_proto::{ClientConfig, StreamId};
 use rustls::{pki_types::CertificateDer, RootCertStore};
+
+#[derive(Default, Debug, Clone, PartialEq, Eq, Hash, States)]
+enum State {
+    #[default]
+    Connecting,
+    SendDatagrams,
+    SpawnStreams,
+    RecvStream,
+}
+
+#[derive(Debug, Resource)]
+struct Stream(StreamId);
 
 fn main() -> AppExit {
     App::new()
         .add_plugins((
             ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(1.0 / 60.0)),
+            StatesPlugin,
             QuicPlugin,
         ))
+        .init_state::<State>()
         .add_systems(Startup, (spawn_endpoint, connect_to_server).chain())
         .add_systems(Update, handle_connection_result)
+        .add_systems(
+            Update,
+            send_datagrams.run_if(in_state(State::SendDatagrams)),
+        )
+        .add_systems(Update, spawn_streams.run_if(in_state(State::SpawnStreams)))
+        .add_systems(Update, recv_stream.run_if(in_state(State::RecvStream)))
         .run()
 }
 
@@ -84,14 +111,51 @@ fn connect_to_server(mut commands: Commands, mut endpoint: Query<Endpoint>) {
 }
 
 fn handle_connection_result(
-    mut success: EventReader<ConnectionEstablished>,
-    mut error: EventReader<EntityError>,
+    mut events: EventReader<ConnectionEvent>,
+    mut state: ResMut<NextState<State>>,
 ) {
-    if let Some(e) = error.read().next() {
-        panic!("{}", e.error);
+    if let Some(event) = events.read().next() {
+        match &event.event {
+            ConnectionEventType::Established => {
+                state.set(State::SendDatagrams);
+                println!("Connection established!");
+            }
+            ConnectionEventType::Lost(e) => panic!("Connection lost: {}", e),
+            ConnectionEventType::IoError(e) => panic!("I/O error: {}", e),
+        }
     }
+}
 
-    if success.read().next().is_some() {
-        println!("Connection established!");
+fn send_datagrams(mut connection: Query<Connection>, mut state: ResMut<NextState<State>>) {
+    let mut connection = connection.get_single_mut().unwrap();
+    for i in 0..10 {
+        let data = format!("Datagram #{i}");
+        connection.send_datagram(data.into()).unwrap();
     }
+    state.set(State::SpawnStreams);
+}
+
+fn spawn_streams(
+    mut commands: Commands,
+    mut connection: Query<Connection>,
+    mut state: ResMut<NextState<State>>,
+) {
+    let mut connection = connection.get_single_mut().unwrap();
+    let stream = connection.open_bi().unwrap();
+    let mut send = connection.send_stream(stream).unwrap();
+    let data = "Stream Data";
+    send.write(data.as_bytes()).unwrap();
+    commands.insert_resource(Stream(stream));
+    state.set(State::RecvStream);
+}
+
+fn recv_stream(mut connection: Query<Connection>, id: Res<Stream>) {
+    let mut connection = connection.get_single_mut().unwrap();
+    let mut recv = connection.recv_stream(id.0).unwrap();
+    let mut chunks = recv.read(true).unwrap();
+    while let Ok(Some(chunk)) = chunks.next(usize::MAX) {
+        let data = String::from_utf8_lossy(&chunk.bytes);
+        println!("Recv: '{}'", data);
+    }
+    let _ = chunks.finalize();
 }

@@ -24,6 +24,9 @@ tracing = { version = "0.1", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 directories = "5.0"
+bevy_state = { git = "https://github.com/Pixelstormer/bevy", branch = "fork-main", default-features = false, features = [
+	"bevy_app",
+] }
 
 [features]
 default = ["platform-verifier"]

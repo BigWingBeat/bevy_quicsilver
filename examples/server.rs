@@ -5,16 +5,25 @@ use std::{net::Ipv6Addr, time::Duration};
 
 use bevy_app::{App, AppExit, ScheduleRunnerPlugin, Startup, Update};
 use bevy_ecs::{
+    component::Component,
     event::{EventReader, EventWriter},
     query::Added,
     system::{Commands, Query},
 };
 use bevy_quicsilver::{
-    connection::ConnectionEstablished, endpoint::EndpointBundle, EntityError, Incoming,
-    IncomingResponse, NewIncoming, QuicPlugin,
+    connection::{Connection, ConnectionEvent, ConnectionEventType},
+    endpoint::EndpointBundle,
+    Incoming, IncomingResponse, NewIncoming, QuicPlugin,
 };
-use quinn_proto::ServerConfig;
+use quinn_proto::{ServerConfig, StreamId};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+
+#[derive(Component)]
+enum ClientState {
+    WaitingForStream,
+    GotStream(StreamId),
+    Receiving(StreamId),
+}
 
 fn main() -> AppExit {
     App::new()
@@ -23,7 +32,10 @@ fn main() -> AppExit {
             QuicPlugin,
         ))
         .add_systems(Startup, spawn_endpoint)
-        .add_systems(Update, (accept_connections, handle_connection_result))
+        .add_systems(
+            Update,
+            (accept_connections, handle_connection_result, handle_clients),
+        )
         .run()
 }
 
@@ -81,6 +93,7 @@ fn init_crypto() -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) {
 }
 
 fn accept_connections(
+    mut commands: Commands,
     new_connections: Query<&Incoming, Added<Incoming>>,
     mut new_connection_events: EventReader<NewIncoming>,
     mut new_connection_responses: EventWriter<IncomingResponse>,
@@ -89,18 +102,61 @@ fn accept_connections(
         let incoming = new_connections.get(entity).unwrap();
         println!("Client connecting from {}", incoming.remote_address());
         new_connection_responses.send(IncomingResponse::accept(entity));
+        commands
+            .entity(entity)
+            .insert(ClientState::WaitingForStream);
     }
 }
 
 fn handle_connection_result(
-    mut success: EventReader<ConnectionEstablished>,
-    mut error: EventReader<EntityError>,
+    connection: Query<Connection>,
+    mut events: EventReader<ConnectionEvent>,
 ) {
-    if let Some(e) = error.read().next() {
-        panic!("{}", e.error);
+    for event in events.read() {
+        let connection = connection.get(event.connection).unwrap();
+        let address = connection.remote_address();
+        match &event.event {
+            ConnectionEventType::Established => {
+                println!("Connection Established with client {address}");
+            }
+            ConnectionEventType::Lost(e) => println!("Client {address} failed to connect: {e}"),
+            ConnectionEventType::IoError(e) => {
+                println!("Client {address} encountered an I/O error: {e}")
+            }
+        }
     }
+}
 
-    if success.read().next().is_some() {
-        println!("Connection established!");
+fn handle_clients(mut connection: Query<(Connection, &mut ClientState)>) {
+    for (mut connection, mut state) in connection.iter_mut() {
+        let address = connection.remote_address();
+
+        while let Some(bytes) = connection.read_datagram() {
+            let data = String::from_utf8_lossy(&bytes);
+            println!("Received datagram from {address}: '{data}'");
+        }
+
+        match *state {
+            ClientState::WaitingForStream => {
+                if let Some(stream) = connection.accept_bi() {
+                    *state = ClientState::GotStream(stream);
+                }
+            }
+            ClientState::GotStream(stream) => {
+                let mut send = connection.send_stream(stream).unwrap();
+                let data = "Server Stream Data";
+                send.write(data.as_bytes()).unwrap();
+                *state = ClientState::Receiving(stream);
+            }
+            ClientState::Receiving(stream) => {
+                let mut recv = connection.recv_stream(stream).unwrap();
+                let mut chunks = recv.read(true).unwrap();
+                while let Ok(Some(chunk)) = chunks.next(usize::MAX) {
+                    let data = String::from_utf8_lossy(&chunk.bytes);
+                    println!("Recv from {address}: '{}'", data);
+                }
+                let _ = chunks.finalize();
+            }
+        }
     }
 }

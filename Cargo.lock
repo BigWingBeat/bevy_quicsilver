@@ -131,6 +131,7 @@ version = "0.1.1"
 dependencies = [
  "bevy_app",
  "bevy_ecs",
+ "bevy_state",
  "bevy_time",
  "bytes",
  "directories",
@@ -168,6 +169,28 @@ dependencies = [
  "quote",
  "syn",
  "uuid",
+]
+
+[[package]]
+name = "bevy_state"
+version = "0.15.0-dev"
+source = "git+https://github.com/Pixelstormer/bevy?branch=fork-main#f39634bb40cb18ea787a704a6bf55f818813a43b"
+dependencies = [
+ "bevy_app",
+ "bevy_ecs",
+ "bevy_state_macros",
+ "bevy_utils",
+]
+
+[[package]]
+name = "bevy_state_macros"
+version = "0.15.0-dev"
+source = "git+https://github.com/Pixelstormer/bevy?branch=fork-main#f39634bb40cb18ea787a704a6bf55f818813a43b"
+dependencies = [
+ "bevy_macro_utils",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
