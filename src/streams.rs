@@ -1,89 +1,17 @@
-use bevy_ecs::{
-    bundle::Bundle,
-    component::{Component, ComponentHooks, StorageType},
-    entity::Entity,
-    query::{QueryEntityError, QuerySingleError},
-    system::{Query, SystemParam},
-};
 use bytes::Bytes;
 use quinn_proto::{Chunks, ClosedStream, FinishError, ReadableError, StreamId, VarInt, WriteError};
 
-use crate::connection::ConnectionImpl;
-
-/// A [`SystemParam`] for querying streams on entities.
-#[derive(Debug, SystemParam)]
-pub struct Streams<'w, 's> {
-    connection: Query<'w, 's, &'static mut ConnectionImpl>,
-    send_stream: Query<'w, 's, &'static mut SendStreamImpl>,
-    recv_stream: Query<'w, 's, &'static mut RecvStreamImpl>,
-}
-
-impl Streams<'_, '_> {
-    /// Returns the [`SendStream`] for the given entity
-    ///
-    /// [`SendStream`]: quinn_proto::SendStream
-    pub fn send_stream(&mut self, entity: Entity) -> Result<SendStream<'_>, QueryEntityError> {
-        let stream = self.send_stream.get_mut(entity)?.into_inner();
-        let connection = self.connection.get_mut(stream.connection)?.into_inner();
-        connection.should_poll = true;
-        Ok(SendStream::new(connection, stream))
-    }
-
-    /// Returns a single [`SendStream`] when there is exactly one.
-    ///
-    /// If the number of [`SendStream`]s is not exactly one, a [`QuerySingleError`] is returned instead.
-    pub fn send_stream_single(&mut self) -> Result<SendStream<'_>, QuerySingleError> {
-        let stream = self.send_stream.get_single_mut()?.into_inner();
-        let connection = self
-            .connection
-            .get_mut(stream.connection)
-            .map_err(|_| QuerySingleError::NoEntities(""))?
-            .into_inner();
-        connection.should_poll = true;
-        Ok(SendStream::new(connection, stream))
-    }
-
-    /// Returns the [`RecvStream`] for the given entity
-    ///
-    /// [`RecvStream`]: quinn_proto::RecvStream
-    pub fn recv_stream(&mut self, entity: Entity) -> Result<RecvStream<'_>, QueryEntityError> {
-        let stream = self.recv_stream.get_mut(entity)?.into_inner();
-        let connection = self.connection.get_mut(stream.connection)?.into_inner();
-        connection.should_poll = true;
-        Ok(RecvStream::new(connection, stream))
-    }
-
-    /// Returns a single [`RecvStream`] when there is exactly one.
-    ///
-    /// If the number of [`RecvStream`]s is not exactly one, a [`QuerySingleError`] is returned instead.
-    pub fn recv_stream_single(&mut self) -> Result<RecvStream<'_>, QuerySingleError> {
-        let stream = self.recv_stream.get_single_mut()?.into_inner();
-        let connection = self
-            .connection
-            .get_mut(stream.connection)
-            .map_err(|_| QuerySingleError::NoEntities(""))?
-            .into_inner();
-        connection.should_poll = true;
-        Ok(RecvStream::new(connection, stream))
-    }
-}
-
 /// A stream that can only be used to send data.
-///
-/// If despawned or removed, streams that haven't been explicitly [`reset()`] will be implicitly [`finish()`]ed,
-/// continuing to (re)transmit previously written data until it has been fully acknowledged or the
-/// connection is closed.
 pub struct SendStream<'a> {
-    proto_stream: quinn_proto::SendStream<'a>,
-    ecs_stream: &'a mut SendStreamImpl,
+    pub(crate) id: StreamId,
+    pub(crate) write_buffer: &'a mut Vec<Bytes>,
+    pub(crate) proto_stream: quinn_proto::SendStream<'a>,
 }
 
 impl<'a> SendStream<'a> {
-    fn new(connection: &'a mut ConnectionImpl, ecs_stream: &'a mut SendStreamImpl) -> Self {
-        Self {
-            proto_stream: connection.send_stream(ecs_stream.stream),
-            ecs_stream,
-        }
+    /// Get the ID of the stream
+    pub fn id(&self) -> StreamId {
+        self.id
     }
 
     /// Send data on the stream
@@ -92,16 +20,13 @@ impl<'a> SendStream<'a> {
             Ok(written) => {
                 let remaining = data.len() - written;
                 if remaining > 0 {
-                    self.ecs_stream
-                        .pending_writes
+                    self.write_buffer
                         .push(Bytes::copy_from_slice(&data[remaining..]));
                 }
                 Ok(())
             }
             Err(WriteError::Blocked) => {
-                self.ecs_stream
-                    .pending_writes
-                    .push(Bytes::copy_from_slice(data));
+                self.write_buffer.push(Bytes::copy_from_slice(data));
                 Ok(())
             }
             result => result.map(|_| ()),
@@ -114,13 +39,12 @@ impl<'a> SendStream<'a> {
     pub fn write_chunks(&mut self, data: &mut [Bytes]) -> Result<(), WriteError> {
         match self.proto_stream.write_chunks(data) {
             Ok(_) => {
-                self.ecs_stream
-                    .pending_writes
+                self.write_buffer
                     .extend(data.iter().filter(|&bytes| !bytes.is_empty()).cloned());
                 Ok(())
             }
             Err(WriteError::Blocked) => {
-                self.ecs_stream.pending_writes.extend_from_slice(data);
+                self.write_buffer.extend_from_slice(data);
                 Ok(())
             }
             result => result.map(|_| ()),
@@ -183,76 +107,7 @@ impl<'a> SendStream<'a> {
     }
 }
 
-/// A bundle for adding a [`SendStream`] to an entity
-#[derive(Debug, Bundle)]
-pub struct SendStreamBundle {
-    stream: SendStreamImpl,
-}
-
-impl SendStreamBundle {
-    pub(crate) fn new(connection: Entity, stream: StreamId) -> Self {
-        Self {
-            stream: SendStreamImpl {
-                connection,
-                stream,
-                pending_writes: Vec::new(),
-            },
-        }
-    }
-}
-
-/// Underlying component type behind the [`SendStream`] and [`SendStreamBundle`] types
-#[derive(Debug, Clone)]
-pub(crate) struct SendStreamImpl {
-    connection: Entity,
-    pub(crate) stream: StreamId,
-    pub(crate) pending_writes: Vec<Bytes>,
-}
-
-impl Component for SendStreamImpl {
-    const STORAGE_TYPE: StorageType = StorageType::Table;
-
-    fn register_component_hooks(hooks: &mut ComponentHooks) {
-        hooks
-            .on_insert(|mut world, entity, _component_id| {
-                let stream = world.get::<Self>(entity).unwrap();
-                let id = stream.stream;
-                let Some(mut connection) = world.get_mut::<ConnectionImpl>(stream.connection)
-                else {
-                    return;
-                };
-
-                connection.streams.insert(id, entity);
-            })
-            .on_replace(|mut world, entity, _component_id| {
-                let stream = world.get::<Self>(entity).unwrap();
-                let id = stream.stream;
-
-                let Some(mut connection) = world.get_mut::<ConnectionImpl>(stream.connection)
-                else {
-                    return;
-                };
-
-                connection.should_poll = true;
-
-                let mut stream = connection.send_stream(id);
-
-                // https://github.com/quinn-rs/quinn/blob/0.11.2/quinn/src/send_stream.rs#L287
-                match stream.finish() {
-                    Ok(()) => {}
-                    Err(FinishError::Stopped(reason)) => {
-                        let _ = stream.reset(reason);
-                    }
-                    // Already finished or reset, which is fine
-                    Err(FinishError::ClosedStream) => {}
-                }
-            });
-    }
-}
-
 /// A stream that can only be used to receive data.
-///
-/// If despawned or removed, [`stop(0)`] is implicitly called, unless the stream has already been stopped.
 ///
 /// # Common issues
 ///
@@ -271,14 +126,14 @@ impl Component for SendStreamImpl {
 /// bidirectional stream 1, the first stream returned by [`Connection::accept_bi`] on the receiver
 /// will be bidirectional stream 0.
 pub struct RecvStream<'a> {
-    proto_stream: quinn_proto::RecvStream<'a>,
+    pub(crate) id: StreamId,
+    pub(crate) proto_stream: quinn_proto::RecvStream<'a>,
 }
 
 impl<'a> RecvStream<'a> {
-    fn new(connection: &'a mut ConnectionImpl, ecs_stream: &'a mut RecvStreamImpl) -> Self {
-        Self {
-            proto_stream: connection.recv_stream(ecs_stream.stream),
-        }
+    /// Get the ID of the stream
+    pub fn id(&self) -> StreamId {
+        self.id
     }
 
     /// Read data from the stream
@@ -320,58 +175,5 @@ impl<'a> RecvStream<'a> {
     /// return `Err(ClosedStream)`.
     pub fn received_reset(&mut self) -> Result<Option<VarInt>, ClosedStream> {
         self.proto_stream.received_reset()
-    }
-}
-
-/// A bundle for adding a [`RecvStream`] to an entity
-#[derive(Debug, Bundle)]
-pub struct RecvStreamBundle {
-    stream: RecvStreamImpl,
-}
-
-impl RecvStreamBundle {
-    pub(crate) fn new(connection: Entity, stream: StreamId) -> Self {
-        Self {
-            stream: RecvStreamImpl { connection, stream },
-        }
-    }
-}
-
-/// Underlying component type behind the [`RecvStream`] and [`RecvStreamBundle`] types
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct RecvStreamImpl {
-    connection: Entity,
-    stream: StreamId,
-}
-
-impl Component for RecvStreamImpl {
-    const STORAGE_TYPE: StorageType = StorageType::Table;
-
-    fn register_component_hooks(hooks: &mut ComponentHooks) {
-        hooks
-            .on_insert(|mut world, entity, _component_id| {
-                let stream = world.get::<Self>(entity).unwrap();
-                let id = stream.stream;
-                let Some(mut connection) = world.get_mut::<ConnectionImpl>(stream.connection)
-                else {
-                    return;
-                };
-
-                connection.streams.insert(id, entity);
-            })
-            .on_replace(|mut world, entity, _component_id| {
-                let stream = world.get::<Self>(entity).unwrap();
-                let id = stream.stream;
-
-                let Some(mut connection) = world.get_mut::<ConnectionImpl>(stream.connection)
-                else {
-                    return;
-                };
-
-                connection.should_poll = true;
-
-                let mut stream = connection.recv_stream(id);
-                let _ = stream.stop(0u32.into());
-            });
     }
 }

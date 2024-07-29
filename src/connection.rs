@@ -10,14 +10,14 @@ use bevy_time::{Real, Time, Timer, TimerMode};
 use bytes::Bytes;
 use hashbrown::HashMap;
 use quinn_proto::{
-    congestion::Controller, crypto::ExportKeyingMaterialError, ConnectionError, ConnectionHandle,
-    ConnectionStats, Dir, EndpointEvent, Event, SendDatagramError, StreamEvent, StreamId, Transmit,
-    VarInt,
+    congestion::Controller, crypto::ExportKeyingMaterialError, ClosedStream, ConnectionError,
+    ConnectionHandle, ConnectionStats, Dir, EndpointEvent, Event, SendDatagramError, StreamEvent,
+    StreamId, Transmit, VarInt,
 };
 
 use crate::{
     endpoint::{Endpoint, EndpointImpl},
-    streams::{RecvStreamBundle, SendStreamBundle, SendStreamImpl},
+    streams::{RecvStream, SendStream},
     KeepAlive,
 };
 
@@ -208,17 +208,19 @@ impl ConnectionItem<'_> {
     }
 
     /// Initiate a new outgoing unidirectional stream.
+    /// To reuse the stream later, the [`SendStream::id`] should be stored and passed to [`Self::send_stream`].
     ///
     /// Streams are cheap and instantaneous to open unless blocked by flow control. As a
     /// consequence, the peer won't be notified that a stream has been opened until the stream is
     /// actually used.
     ///
     /// Returns `None` if outgoing unidirectional streams are currently exhausted.
-    pub fn open_uni(&mut self) -> Option<SendStreamBundle> {
-        self.connection.open_uni(self.entity)
+    pub fn open_uni(&mut self) -> Option<SendStream<'_>> {
+        self.connection.open_uni()
     }
 
     /// Initiate a new outgoing bidirectional stream.
+    /// The returned stream ID can be passed to both [`Self::send_stream`] and [`Self::recv_stream`].
     ///
     /// Streams are cheap and instantaneous to open unless blocked by flow control. As a
     /// consequence, the peer won't be notified that a stream has been opened until the stream is
@@ -230,19 +232,21 @@ impl ConnectionItem<'_> {
     /// [`open_bi()`]: crate::Connection::open_bi
     /// [`SendStream`]: crate::SendStream
     /// [`RecvStream`]: crate::RecvStream
-    pub fn open_bi(&mut self) -> Option<(SendStreamBundle, RecvStreamBundle)> {
-        self.connection.open_bi(self.entity)
+    pub fn open_bi(&mut self) -> Option<StreamId> {
+        self.connection.open_bi()
     }
 
     /// Accept the next incoming unidirectional stream.
+    /// To reuse the stream later, the [`SendStream::id`] should be stored and passed to [`Self::recv_stream`].
     ///
     /// Returns `None` if there are no new incoming unidirectional streams for this connection.
     /// Has no impact on the data flow-control or stream concurrency limits.
-    pub fn accept_uni(&mut self) -> Option<RecvStreamBundle> {
-        self.connection.accept_uni(self.entity)
+    pub fn accept_uni(&mut self) -> Option<RecvStream<'_>> {
+        self.connection.accept_uni()
     }
 
     /// Accept the next incoming bidirectional stream.
+    /// The returned stream ID can be passed to both [`Self::send_stream`] and [`Self::recv_stream`].
     ///
     /// **Important Note**: The `Connection` that calls [`open_bi()`] must write to its [`SendStream`]
     /// before the other `Connection` is able to `accept_bi()`.
@@ -255,8 +259,24 @@ impl ConnectionItem<'_> {
     /// [`open_bi()`]: crate::Connection::open_bi
     /// [`SendStream`]: crate::SendStream
     /// [`RecvStream`]: crate::RecvStream
-    pub fn accept_bi(&mut self) -> Option<(SendStreamBundle, RecvStreamBundle)> {
-        self.connection.accept_bi(self.entity)
+    pub fn accept_bi(&mut self) -> Option<StreamId> {
+        self.connection.accept_bi()
+    }
+
+    /// Get the send stream associated with the given stream ID.
+    ///
+    /// # Panics
+    /// Panics if the given stream ID is not associated with a send stream.
+    pub fn send_stream(&mut self, id: StreamId) -> Result<SendStream<'_>, ClosedStream> {
+        self.connection.send_stream(id)
+    }
+
+    /// Get the receive stream associated with the given stream ID.
+    ///
+    /// # Panics
+    /// Panics if the given stream ID is not associated with a receive stream.
+    pub fn recv_stream(&mut self, id: StreamId) -> Result<RecvStream<'_>, ClosedStream> {
+        self.connection.recv_stream(id)
     }
 
     /// Transmit `data` as an unreliable, unordered application datagram
@@ -506,38 +526,22 @@ pub(crate) struct ConnectionImpl {
     io_error: bool,
     blocked_transmit: Option<Transmit>,
     transmit_buf: Vec<u8>,
-    pub(crate) streams: HashMap<StreamId, Entity>,
     pending_datagrams: Vec<Bytes>,
+    pending_streams: HashMap<StreamId, Vec<Bytes>>,
 }
 
 impl Component for ConnectionImpl {
     const STORAGE_TYPE: StorageType = StorageType::Table;
 
     fn register_component_hooks(hooks: &mut ComponentHooks) {
-        hooks
-            .on_insert(|mut world, entity, _component_id| {
-                let connection = world.get::<Self>(entity).unwrap();
-                let handle = connection.handle;
-                let Some(mut endpoint) = world.get_mut::<EndpointImpl>(connection.endpoint) else {
-                    return;
-                };
-                endpoint.connections.insert(handle, entity);
-            })
-            .on_replace(|mut world, entity, _component_id| {
-                let connection = world.get::<Self>(entity).unwrap();
-                for stream_entity in connection.streams.values().copied().collect::<Vec<_>>() {
-                    if let Some(stream) = world.get_entity(stream_entity) {
-                        if stream.contains::<KeepAlive>() {
-                            world
-                                .commands()
-                                .entity(stream_entity)
-                                .remove::<(SendStreamBundle, RecvStreamBundle)>();
-                        } else {
-                            world.commands().entity(stream_entity).despawn();
-                        }
-                    }
-                }
-            });
+        hooks.on_insert(|mut world, entity, _component_id| {
+            let connection = world.get::<Self>(entity).unwrap();
+            let handle = connection.handle;
+            let Some(mut endpoint) = world.get_mut::<EndpointImpl>(connection.endpoint) else {
+                return;
+            };
+            endpoint.connections.insert(handle, entity);
+        });
     }
 }
 
@@ -556,8 +560,8 @@ impl ConnectionImpl {
             io_error: false,
             blocked_transmit: None,
             transmit_buf: Vec::new(),
-            streams: HashMap::new(),
             pending_datagrams: Vec::new(),
+            pending_streams: HashMap::new(),
         }
     }
 
@@ -574,44 +578,61 @@ impl ConnectionImpl {
         self.should_poll = true;
     }
 
-    fn open_uni(&mut self, self_entity: Entity) -> Option<SendStreamBundle> {
-        self.connection
-            .streams()
-            .open(Dir::Uni)
-            .map(|stream| SendStreamBundle::new(self_entity, stream))
-    }
-
-    fn open_bi(&mut self, self_entity: Entity) -> Option<(SendStreamBundle, RecvStreamBundle)> {
-        self.connection.streams().open(Dir::Bi).map(|stream| {
-            (
-                SendStreamBundle::new(self_entity, stream),
-                RecvStreamBundle::new(self_entity, stream),
-            )
+    fn open_uni(&mut self) -> Option<SendStream<'_>> {
+        self.should_poll = true;
+        self.connection.streams().open(Dir::Uni).map(|id| {
+            let write_buffer = self.pending_streams.entry(id).or_default();
+            SendStream {
+                id,
+                write_buffer,
+                proto_stream: self.connection.send_stream(id),
+            }
         })
     }
 
-    fn accept_uni(&mut self, self_entity: Entity) -> Option<RecvStreamBundle> {
+    fn open_bi(&mut self) -> Option<StreamId> {
+        self.should_poll = true;
+        self.connection.streams().open(Dir::Bi).inspect(|&id| {
+            self.pending_streams.insert(id, Vec::new());
+        })
+    }
+
+    fn accept_uni(&mut self) -> Option<RecvStream<'_>> {
+        self.should_poll = true;
         self.connection
             .streams()
             .accept(Dir::Uni)
-            .map(|stream| RecvStreamBundle::new(self_entity, stream))
+            .map(|id| RecvStream {
+                id,
+                proto_stream: self.connection.recv_stream(id),
+            })
     }
 
-    fn accept_bi(&mut self, self_entity: Entity) -> Option<(SendStreamBundle, RecvStreamBundle)> {
-        self.connection.streams().accept(Dir::Bi).map(|stream| {
-            (
-                SendStreamBundle::new(self_entity, stream),
-                RecvStreamBundle::new(self_entity, stream),
-            )
+    fn accept_bi(&mut self) -> Option<StreamId> {
+        self.should_poll = true;
+        self.connection.streams().accept(Dir::Bi).inspect(|&id| {
+            self.pending_streams.insert(id, Vec::new());
         })
     }
 
-    pub(crate) fn send_stream(&mut self, id: StreamId) -> quinn_proto::SendStream<'_> {
-        self.connection.send_stream(id)
+    pub(crate) fn send_stream(&mut self, id: StreamId) -> Result<SendStream<'_>, ClosedStream> {
+        self.should_poll = true;
+        self.pending_streams
+            .get_mut(&id)
+            .ok_or(ClosedStream::new())
+            .map(|write_buffer| SendStream {
+                id,
+                write_buffer,
+                proto_stream: self.connection.send_stream(id),
+            })
     }
 
-    pub(crate) fn recv_stream(&mut self, id: StreamId) -> quinn_proto::RecvStream<'_> {
-        self.connection.recv_stream(id)
+    pub(crate) fn recv_stream(&mut self, id: StreamId) -> Result<RecvStream<'_>, ClosedStream> {
+        self.should_poll = true;
+        Ok(RecvStream {
+            id,
+            proto_stream: self.connection.recv_stream(id),
+        })
     }
 
     fn send_datagram(&mut self, data: Bytes) -> Result<(), SendDatagramError> {
@@ -775,7 +796,6 @@ impl ConnectionImpl {
 pub(crate) fn poll_connections(
     mut commands: Commands,
     mut query: Query<(Entity, &mut ConnectionImpl, Has<KeepAlive>)>,
-    mut stream_query: Query<&mut SendStreamImpl>,
     mut endpoint: Query<Endpoint>,
     mut connection_events: EventWriter<ConnectionEvent>,
     mut handshake_events: EventWriter<HandshakeDataReady>,
@@ -897,19 +917,19 @@ pub(crate) fn poll_connections(
             }
 
             for id in streams_to_flush {
-                let &stream_entity = connection
-                    .streams
-                    .get(&id)
-                    .expect("StreamId {id:?} is missing Entity mapping");
+                let ConnectionImpl {
+                    connection,
+                    should_poll,
+                    pending_streams,
+                    ..
+                } = &mut *connection;
 
-                let Ok(mut stream) = stream_query.get_mut(stream_entity) else {
-                    continue;
-                };
-
-                let mut proto_stream = connection.send_stream(id);
-                let _ = proto_stream.write_chunks(&mut stream.pending_writes);
-                stream.pending_writes.retain(|bytes| !bytes.is_empty());
-                connection.should_poll = true;
+                if let Some(pending_writes) = pending_streams.get_mut(&id) {
+                    let mut proto_stream = connection.send_stream(id);
+                    let _ = proto_stream.write_chunks(pending_writes);
+                    pending_writes.retain(|bytes| !bytes.is_empty());
+                    *should_poll = true;
+                }
             }
         }
 
