@@ -119,10 +119,8 @@ fn handle_connection_result(
             ConnectionEventType::Established => {
                 println!("Connection Established with client {address}");
             }
-            ConnectionEventType::Lost(e) => println!("Client {address} failed to connect: {e}"),
-            ConnectionEventType::IoError(e) => {
-                println!("Client {address} encountered an I/O error: {e}")
-            }
+            ConnectionEventType::Lost(e) => println!("Client {address} disconnected: {e}"),
+            ConnectionEventType::IoError(e) => println!("I/O error: {e}"),
         }
     }
 }
@@ -153,7 +151,7 @@ fn handle_clients(mut connection: Query<(Connection, &mut ClientState)>) {
                 let mut chunks = recv.read(true).unwrap();
                 while let Ok(Some(chunk)) = chunks.next(usize::MAX) {
                     let data = String::from_utf8_lossy(&chunk.bytes);
-                    println!("Recv from {address}: '{}'", data);
+                    println!("Recieved from {address}: '{}'", data);
                 }
                 let _ = chunks.finalize();
             }

@@ -143,7 +143,7 @@ fn spawn_streams(
     let mut connection = connection.get_single_mut().unwrap();
     let stream = connection.open_bi().unwrap();
     let mut send = connection.send_stream(stream).unwrap();
-    let data = "Stream Data";
+    let data = "Client Stream Data";
     send.write(data.as_bytes()).unwrap();
     commands.insert_resource(Stream(stream));
     state.set(State::RecvStream);
@@ -155,7 +155,7 @@ fn recv_stream(mut connection: Query<Connection>, id: Res<Stream>) {
     let mut chunks = recv.read(true).unwrap();
     while let Ok(Some(chunk)) = chunks.next(usize::MAX) {
         let data = String::from_utf8_lossy(&chunk.bytes);
-        println!("Recv: '{}'", data);
+        println!("Received from server: '{}'", data);
     }
     let _ = chunks.finalize();
 }
