@@ -144,16 +144,18 @@ fn handle_clients(mut connection: Query<(Connection, &mut ClientState)>) {
                 let mut send = connection.send_stream(stream).unwrap();
                 let data = "Server Stream Data";
                 send.write(data.as_bytes()).unwrap();
+                send.finish().unwrap();
                 *state = ClientState::Receiving(stream);
             }
             ClientState::Receiving(stream) => {
                 let mut recv = connection.recv_stream(stream).unwrap();
-                let mut chunks = recv.read(true).unwrap();
-                while let Ok(Some(chunk)) = chunks.next(usize::MAX) {
-                    let data = String::from_utf8_lossy(&chunk.bytes);
-                    println!("Recieved from {address}: '{}'", data);
-                }
-                let _ = chunks.finalize();
+                if let Ok(mut chunks) = recv.read(true) {
+                    while let Ok(Some(chunk)) = chunks.next(usize::MAX) {
+                        let data = String::from_utf8_lossy(&chunk.bytes);
+                        println!("Recieved from {address}: '{}'", data);
+                    }
+                    let _ = chunks.finalize();
+                };
             }
         }
     }

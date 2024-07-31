@@ -6,21 +6,22 @@ use std::{
 
 use bevy_app::{App, AppExit, ScheduleRunnerPlugin, Startup, Update};
 use bevy_ecs::{
-    event::EventReader,
+    event::{EventReader, EventWriter},
+    observer::Trigger,
     schedule::IntoSystemConfigs,
     system::{Commands, Query, Res, ResMut, Resource},
 };
 use bevy_quicsilver::{
-    connection::{Connection, ConnectionEvent, ConnectionEventType},
+    connection::{Connection, ConnectionDrained, ConnectionEvent, ConnectionEventType},
     endpoint::EndpointBundle,
     Endpoint, QuicPlugin,
 };
 use bevy_state::{
     app::{AppExtStates, StatesPlugin},
     prelude::in_state,
-    state::{NextState, States},
+    state::{NextState, OnEnter, States},
 };
-use quinn_proto::{ClientConfig, StreamId};
+use quinn_proto::{ClientConfig, ReadableError, StreamId, VarInt};
 use rustls::{pki_types::CertificateDer, RootCertStore};
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash, States)]
@@ -30,6 +31,7 @@ enum State {
     SendDatagrams,
     SpawnStreams,
     RecvStream,
+    Closing,
 }
 
 #[derive(Debug, Resource)]
@@ -45,12 +47,11 @@ fn main() -> AppExit {
         .init_state::<State>()
         .add_systems(Startup, (spawn_endpoint, connect_to_server).chain())
         .add_systems(Update, handle_connection_result)
-        .add_systems(
-            Update,
-            send_datagrams.run_if(in_state(State::SendDatagrams)),
-        )
-        .add_systems(Update, spawn_streams.run_if(in_state(State::SpawnStreams)))
+        .add_systems(OnEnter(State::SendDatagrams), send_datagrams)
+        .add_systems(OnEnter(State::SpawnStreams), spawn_streams)
         .add_systems(Update, recv_stream.run_if(in_state(State::RecvStream)))
+        .add_systems(OnEnter(State::Closing), close_connection)
+        .observe(exit_app)
         .run()
 }
 
@@ -145,17 +146,37 @@ fn spawn_streams(
     let mut send = connection.send_stream(stream).unwrap();
     let data = "Client Stream Data";
     send.write(data.as_bytes()).unwrap();
+    send.finish().unwrap();
     commands.insert_resource(Stream(stream));
     state.set(State::RecvStream);
 }
 
-fn recv_stream(mut connection: Query<Connection>, id: Res<Stream>) {
+fn recv_stream(
+    mut connection: Query<Connection>,
+    id: Res<Stream>,
+    mut state: ResMut<NextState<State>>,
+) {
     let mut connection = connection.get_single_mut().unwrap();
     let mut recv = connection.recv_stream(id.0).unwrap();
-    let mut chunks = recv.read(true).unwrap();
-    while let Ok(Some(chunk)) = chunks.next(usize::MAX) {
-        let data = String::from_utf8_lossy(&chunk.bytes);
-        println!("Received from server: '{}'", data);
-    }
-    let _ = chunks.finalize();
+    match recv.read(true) {
+        Ok(mut chunks) => {
+            while let Ok(Some(chunk)) = chunks.next(usize::MAX) {
+                let data = String::from_utf8_lossy(&chunk.bytes);
+                println!("Received from server: '{}'", data);
+            }
+            let _ = chunks.finalize();
+        }
+        Err(ReadableError::ClosedStream) => state.set(State::Closing),
+        Err(ReadableError::IllegalOrderedRead) => unreachable!(),
+    };
+}
+
+fn close_connection(mut connection: Query<Connection>) {
+    println!("Closing");
+    let mut connection = connection.get_single_mut().unwrap();
+    connection.close(VarInt::from_u32(0), "Closing".into());
+}
+
+fn exit_app(_: Trigger<ConnectionDrained>, mut exit: EventWriter<AppExit>) {
+    exit.send(AppExit::Success);
 }

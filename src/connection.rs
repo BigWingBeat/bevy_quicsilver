@@ -70,6 +70,10 @@ pub enum ConnectionEventType {
     IoError(std::io::Error),
 }
 
+/// An observer trigger that is raised when a connection has been fully closed, and is just about to be despawned
+#[derive(Debug, bevy_ecs::event::Event)]
+pub struct ConnectionDrained;
+
 /// A bundle for adding a new connection to an entity
 #[derive(Debug, Bundle)]
 pub struct ConnectingBundle {
@@ -534,14 +538,18 @@ impl Component for ConnectionImpl {
     const STORAGE_TYPE: StorageType = StorageType::Table;
 
     fn register_component_hooks(hooks: &mut ComponentHooks) {
-        hooks.on_insert(|mut world, entity, _component_id| {
-            let connection = world.get::<Self>(entity).unwrap();
-            let handle = connection.handle;
-            let Some(mut endpoint) = world.get_mut::<EndpointImpl>(connection.endpoint) else {
-                return;
-            };
-            endpoint.connections.insert(handle, entity);
-        });
+        hooks
+            .on_insert(|mut world, entity, _component_id| {
+                let connection = world.get::<Self>(entity).unwrap();
+                let handle = connection.handle;
+                let Some(mut endpoint) = world.get_mut::<EndpointImpl>(connection.endpoint) else {
+                    return;
+                };
+                endpoint.connections.insert(handle, entity);
+            })
+            .on_remove(|mut world, entity, _component_id| {
+                world.trigger_targets(ConnectionDrained, entity);
+            });
     }
 }
 
@@ -900,12 +908,12 @@ pub(crate) fn poll_connections(
                     Event::ConnectionLost { reason } => {
                         connection_events.send(ConnectionEvent::lost(entity, reason));
                     }
-                    Event::Stream(StreamEvent::Opened { dir }) => todo!(),
-                    Event::Stream(StreamEvent::Readable { id }) => todo!(),
+                    Event::Stream(StreamEvent::Opened { dir }) => {}
+                    Event::Stream(StreamEvent::Readable { id }) => {}
                     Event::Stream(StreamEvent::Writable { id }) => streams_to_flush.push(id),
                     Event::Stream(StreamEvent::Finished { id }) => {}
-                    Event::Stream(StreamEvent::Stopped { id, error_code }) => todo!(),
-                    Event::Stream(StreamEvent::Available { dir }) => todo!(),
+                    Event::Stream(StreamEvent::Stopped { id, error_code }) => {}
+                    Event::Stream(StreamEvent::Available { dir }) => {}
                     Event::DatagramReceived => {}
                     Event::DatagramsUnblocked => connection.flush_pending_datagrams(),
                 }
