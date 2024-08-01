@@ -617,32 +617,52 @@ mod tests {
 
     use bevy_app::{App, PostUpdate};
     use bevy_ecs::{
+        entity::Entity,
         event::{EventReader, Events},
+        observer::Trigger,
         query::Without,
+        system::{ResMut, Resource},
     };
     use quinn_proto::{ClientConfig, EndpointConfig, ServerConfig};
     use rcgen::CertifiedKey;
     use rustls::{pki_types::PrivateKeyDer, RootCertStore};
 
     use crate::{
-        connection::{Connecting, Connection, ConnectionEvent, ConnectionEventType},
-        incoming::NewIncoming,
+        connection::{Connecting, Connection, ConnectionError, ConnectionEstablished},
+        incoming::{IncomingError, NewIncoming},
         plugin::QuicPlugin,
         Incoming, IncomingResponse,
     };
 
     use super::{Endpoint, EndpointBundle, EndpointError};
 
-    fn panic_on_error_event(mut errors: EventReader<EndpointError>) {
-        if errors.is_empty() {
+    #[derive(Debug, Resource, Default)]
+    struct ConnectionEstablishedEntities(Vec<Entity>);
+
+    fn panic_on_error_event(
+        mut endpoint: EventReader<EndpointError>,
+        mut connection: EventReader<ConnectionError>,
+        mut incoming: EventReader<IncomingError>,
+    ) {
+        if endpoint.is_empty() && connection.is_empty() && incoming.is_empty() {
             return;
         }
 
-        let mut panic_string = format!("Encountered {} entity errors:", errors.len());
+        let mut panic_string = format!("Encountered {} entity errors:", endpoint.len());
         panic_string.extend(
-            errors
+            endpoint
                 .read()
-                .map(|error| format!("\n    entity {:?}: {}", error.endpoint, error.error)),
+                .map(|error| format!("\n    entity {:?}: {}", error.endpoint, error.error))
+                .chain(
+                    connection.read().map(|error| {
+                        format!("\n    entity {:?}: {}", error.connection, error.error)
+                    }),
+                )
+                .chain(
+                    incoming
+                        .read()
+                        .map(|error| format!("\n    entity {:?}: {}", error.incoming, error.error)),
+                ),
         );
 
         panic!("{}", panic_string);
@@ -677,6 +697,13 @@ mod tests {
     fn setup_app() -> App {
         let mut app = App::new();
         app.add_plugins(QuicPlugin);
+        app.init_resource::<ConnectionEstablishedEntities>();
+        app.observe(
+            |trigger: Trigger<ConnectionEstablished>,
+             mut entities: ResMut<ConnectionEstablishedEntities>| {
+                entities.0.push(trigger.entity())
+            },
+        );
         app.add_systems(PostUpdate, panic_on_error_event);
         app
     }
@@ -848,23 +875,13 @@ mod tests {
         let (client_connection, server_connection) =
             establish_connection!(app, app, endpoint_entity, endpoint_entity);
 
-        let events = app.world().resource::<Events<ConnectionEvent>>();
-        let mut reader = events.get_cursor();
-        let mut events = reader.read(events);
+        let connection_established_entities =
+            &app.world().resource::<ConnectionEstablishedEntities>().0;
 
         // One of these is for the client and the other is for the server, but we don't know which way round they are
-        let conn_a = events.next().unwrap();
-        let conn_b = events.next().unwrap();
-
-        assert!(matches!(conn_a.event, ConnectionEventType::Established));
-        assert!(matches!(conn_b.event, ConnectionEventType::Established));
-        assert!(events.next().is_none());
-
-        let conn_a = conn_a.connection;
-        let conn_b = conn_b.connection;
         assert!(
-            [conn_a, conn_b] == [client_connection, server_connection]
-                || [conn_b, conn_a] == [client_connection, server_connection]
+            connection_established_entities == &[client_connection, server_connection]
+                || connection_established_entities == &[server_connection, client_connection]
         );
 
         test_datagrams!(app, app, client_connection, server_connection);
@@ -883,23 +900,13 @@ mod tests {
         let (client_connection, server_connection) =
             establish_connection!(app, app, client_endpoint, server_endpoint);
 
-        let events = app.world().resource::<Events<ConnectionEvent>>();
-        let mut reader = events.get_cursor();
-        let mut events = reader.read(events);
+        let connection_established_entities =
+            &app.world().resource::<ConnectionEstablishedEntities>().0;
 
         // One of these is for the client and the other is for the server, but we don't know which way round they are
-        let conn_a = events.next().unwrap();
-        let conn_b = events.next().unwrap();
-
-        assert!(matches!(conn_a.event, ConnectionEventType::Established));
-        assert!(matches!(conn_b.event, ConnectionEventType::Established));
-        assert!(events.next().is_none());
-
-        let conn_a = conn_a.connection;
-        let conn_b = conn_b.connection;
         assert!(
-            [conn_a, conn_b] == [client_connection, server_connection]
-                || [conn_b, conn_a] == [client_connection, server_connection]
+            connection_established_entities == &[client_connection, server_connection]
+                || connection_established_entities == &[server_connection, client_connection]
         );
 
         test_datagrams!(app, app, client_connection, server_connection);
@@ -920,31 +927,17 @@ mod tests {
             establish_connection!(client_app, server_app, client_endpoint, server_endpoint);
 
         // Each app should have 1 connection established event
-        let events = client_app.world().resource::<Events<ConnectionEvent>>();
-        let mut reader = events.get_cursor();
-        let mut events = reader.read(events);
-        let connection_event = events.next().unwrap();
-        assert!(matches!(
-            connection_event.event,
-            ConnectionEventType::Established
-        ));
-        assert!(events.next().is_none());
+        let established = &client_app
+            .world()
+            .resource::<ConnectionEstablishedEntities>()
+            .0;
+        assert_eq!(established, &[client_connection]);
 
-        let connection_entity = connection_event.connection;
-        assert_eq!(connection_entity, client_connection);
-
-        let events = server_app.world().resource::<Events<ConnectionEvent>>();
-        let mut reader = events.get_cursor();
-        let mut events = reader.read(events);
-        let connection_event = events.next().unwrap();
-        assert!(matches!(
-            connection_event.event,
-            ConnectionEventType::Established
-        ));
-        assert!(events.next().is_none());
-
-        let connection_entity = connection_event.connection;
-        assert_eq!(connection_entity, server_connection);
+        let established = &server_app
+            .world()
+            .resource::<ConnectionEstablishedEntities>()
+            .0;
+        assert_eq!(established, &[server_connection]);
 
         test_datagrams!(client_app, server_app, client_connection, server_connection);
     }

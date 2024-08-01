@@ -12,7 +12,9 @@ use bevy_ecs::{
     system::{Commands, Query, Res, ResMut, Resource},
 };
 use bevy_quicsilver::{
-    connection::{Connection, ConnectionDrained, ConnectionEvent, ConnectionEventType},
+    connection::{
+        Connection, ConnectionDrained, ConnectionError, ConnectionErrorType, ConnectionEstablished,
+    },
     endpoint::EndpointBundle,
     Endpoint, QuicPlugin,
 };
@@ -46,7 +48,8 @@ fn main() -> AppExit {
         ))
         .init_state::<State>()
         .add_systems(Startup, (spawn_endpoint, connect_to_server).chain())
-        .add_systems(Update, handle_connection_result)
+        .add_systems(Update, handle_connection_error)
+        .observe(connection_established)
         .add_systems(OnEnter(State::SendDatagrams), send_datagrams)
         .add_systems(OnEnter(State::SpawnStreams), spawn_streams)
         .add_systems(Update, recv_stream.run_if(in_state(State::RecvStream)))
@@ -111,20 +114,18 @@ fn connect_to_server(mut commands: Commands, mut endpoint: Query<Endpoint>) {
     println!("Connecting to server...");
 }
 
-fn handle_connection_result(
-    mut events: EventReader<ConnectionEvent>,
-    mut state: ResMut<NextState<State>>,
-) {
+fn handle_connection_error(mut events: EventReader<ConnectionError>) {
     if let Some(event) = events.read().next() {
-        match &event.event {
-            ConnectionEventType::Established => {
-                state.set(State::SendDatagrams);
-                println!("Connection established!");
-            }
-            ConnectionEventType::Lost(e) => panic!("Connection lost: {}", e),
-            ConnectionEventType::IoError(e) => panic!("I/O error: {}", e),
+        match &event.error {
+            ConnectionErrorType::Lost(e) => panic!("Connection lost: {}", e),
+            ConnectionErrorType::IoError(e) => panic!("I/O error: {}", e),
         }
     }
+}
+
+fn connection_established(_: Trigger<ConnectionEstablished>, mut state: ResMut<NextState<State>>) {
+    state.set(State::SendDatagrams);
+    println!("Connection established!");
 }
 
 fn send_datagrams(mut connection: Query<Connection>, mut state: ResMut<NextState<State>>) {

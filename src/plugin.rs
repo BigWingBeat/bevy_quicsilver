@@ -3,7 +3,7 @@ use bevy_ecs::schedule::IntoSystemConfigs;
 use bevy_time::TimePlugin;
 
 use crate::{
-    connection::{poll_connections, ConnectionEvent, HandshakeDataReady},
+    connection::{poll_connections, ConnectionError, HandshakeDataReady},
     endpoint::{poll_endpoints, EndpointError},
     incoming::{handle_incoming_responses, IncomingError},
     IncomingResponse, NewIncoming,
@@ -20,10 +20,10 @@ impl Plugin for QuicPlugin {
 
         app.add_event::<NewIncoming>()
             .add_event::<IncomingResponse>()
-            .add_event::<ConnectionEvent>()
-            .add_event::<HandshakeDataReady>()
             .add_event::<EndpointError>()
             .add_event::<IncomingError>()
+            .add_event::<ConnectionError>()
+            .add_event::<HandshakeDataReady>()
             .add_systems(
                 PreUpdate,
                 poll_endpoints, // Handles receiving data for the user to process, so runs in PreUpdate

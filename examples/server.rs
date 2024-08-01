@@ -7,11 +7,12 @@ use bevy_app::{App, AppExit, ScheduleRunnerPlugin, Startup, Update};
 use bevy_ecs::{
     component::Component,
     event::{EventReader, EventWriter},
+    observer::Trigger,
     query::Added,
     system::{Commands, Query},
 };
 use bevy_quicsilver::{
-    connection::{Connection, ConnectionEvent, ConnectionEventType},
+    connection::{Connection, ConnectionError, ConnectionErrorType, ConnectionEstablished},
     endpoint::EndpointBundle,
     Incoming, IncomingResponse, NewIncoming, QuicPlugin,
 };
@@ -34,8 +35,9 @@ fn main() -> AppExit {
         .add_systems(Startup, spawn_endpoint)
         .add_systems(
             Update,
-            (accept_connections, handle_connection_result, handle_clients),
+            (accept_connections, handle_connection_error, handle_clients),
         )
+        .observe(connection_established)
         .run()
 }
 
@@ -108,21 +110,24 @@ fn accept_connections(
     }
 }
 
-fn handle_connection_result(
+fn handle_connection_error(
     connection: Query<Connection>,
-    mut events: EventReader<ConnectionEvent>,
+    mut events: EventReader<ConnectionError>,
 ) {
     for event in events.read() {
         let connection = connection.get(event.connection).unwrap();
         let address = connection.remote_address();
-        match &event.event {
-            ConnectionEventType::Established => {
-                println!("Connection Established with client {address}");
-            }
-            ConnectionEventType::Lost(e) => println!("Client {address} disconnected: {e}"),
-            ConnectionEventType::IoError(e) => println!("I/O error: {e}"),
+        match &event.error {
+            ConnectionErrorType::Lost(e) => println!("Client {address} disconnected: {e}"),
+            ConnectionErrorType::IoError(e) => println!("I/O error: {e}"),
         }
     }
+}
+
+fn connection_established(trigger: Trigger<ConnectionEstablished>, connection: Query<Connection>) {
+    let connection = connection.get(trigger.entity()).unwrap();
+    let address = connection.remote_address();
+    println!("Connection established with client {address}");
 }
 
 fn handle_clients(mut connection: Query<(Connection, &mut ClientState)>) {
