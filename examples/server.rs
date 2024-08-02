@@ -44,11 +44,15 @@ fn main() -> AppExit {
 fn spawn_endpoint(mut commands: Commands) {
     let (cert, key) = init_crypto();
 
-    // Hardcoding the server port number allows you to do the same in the client app,
-    // removing the need to find some way of externally communicating it to clients
+    // Use a wildcard IP and a hardcoded port number for the local socket.
+    // To be able to connect to us, clients need to know this machine's IP address,
+    // or a domain name that resolves to this machines IP, as well as the port number we specify here.
+    // The IP specified here does not need to be known to the client.
+    // If we specified 0 as the port, the OS would assign some random port number.
+    // For the sake of this example, the port number is hardcoded
     commands.spawn(
         EndpointBundle::new_server(
-            (Ipv6Addr::LOCALHOST, 4433).into(),
+            (Ipv6Addr::UNSPECIFIED, 4433).into(),
             ServerConfig::with_single_cert(cert, key).unwrap(),
         )
         .unwrap(),
@@ -100,6 +104,9 @@ fn accept_connections(
     mut new_connection_events: EventReader<NewIncoming>,
     mut new_connection_responses: EventWriter<IncomingResponse>,
 ) {
+    // When a client tries to connect it starts as an `Incoming` that we must respond to.
+    // Here we unconditionally accept connections, but you can also reject or ignore connections,
+    // or tell clients to retry with address validation
     for &NewIncoming(entity) in new_connection_events.read() {
         let incoming = new_connections.get(entity).unwrap();
         println!("Client connecting from {}", incoming.remote_address());

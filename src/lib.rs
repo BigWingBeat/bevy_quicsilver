@@ -18,6 +18,8 @@ mod plugin;
 mod socket;
 pub mod streams;
 
-/// If this component is placed on an entity, it will never be automatically despawned by this library
+/// If this component is placed on an entity, it will never be automatically despawned by this library.
+/// For example, closing a connection normally results in the entity being despawned, but if this component
+/// is on the entity, instead only the connection components will be removed from the entity, and it will not be despawned
 #[derive(Debug, Component)]
 pub struct KeepAlive;
