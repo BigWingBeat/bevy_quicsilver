@@ -609,6 +609,9 @@ mod tests {
     #[derive(Debug, Resource, Default)]
     struct ConnectionEstablishedEntities(Vec<Entity>);
 
+    #[derive(Debug, Resource, Default)]
+    struct NewIncomingEntities(Vec<Entity>);
+
     fn panic_on_error<T: Error>(trigger: Trigger<T>) {
         panic!(
             "Entity {} encountered an error: {}",
@@ -647,6 +650,12 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(QuicPlugin)
             .init_resource::<ConnectionEstablishedEntities>()
+            .init_resource::<NewIncomingEntities>()
+            .observe(
+                |trigger: Trigger<NewIncoming>, mut entities: ResMut<NewIncomingEntities>| {
+                    entities.0.push(trigger.entity());
+                },
+            )
             .observe(
                 |trigger: Trigger<ConnectionEstablished>,
                  mut entities: ResMut<ConnectionEstablishedEntities>| {
@@ -700,11 +709,10 @@ mod tests {
             // Server reads packet from client and spawns an Incoming
             $server_app.update();
 
-            let events = $server_app.world().resource::<Events<NewIncoming>>();
-            let mut reader = events.get_cursor();
-            let mut events = reader.read(events);
-            let server_connection = events.next().unwrap().0;
-            assert!(events.next().is_none());
+            let events = $server_app.world().resource::<NewIncomingEntities>();
+            let [server_connection] = events.0[..] else {
+                panic!("NewIncoming should fire once but didn't: {:?}", events);
+            };
 
             let incoming = $server_app
                 .world_mut()

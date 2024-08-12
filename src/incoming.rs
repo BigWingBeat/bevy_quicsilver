@@ -37,10 +37,10 @@ pub enum IncomingError {
     RetryError,
 }
 
-/// Event raised whenever an endpoint receives a new incoming client connection.
+/// An observer trigger that is fired whenever an endpoint receives a new incoming client connection.
 /// The specified entity will have an [`Incoming`] component
 #[derive(Debug, Event)]
-pub struct NewIncoming(pub Entity);
+pub struct NewIncoming;
 
 #[derive(Debug, Clone)]
 enum IncomingResponseType {
@@ -143,7 +143,7 @@ impl Component for Incoming {
 
     fn register_component_hooks(hooks: &mut ComponentHooks) {
         hooks.on_add(|mut world, entity, _component_id| {
-            world.send_event(NewIncoming(entity));
+            world.trigger_targets(NewIncoming, entity);
         });
     }
 }

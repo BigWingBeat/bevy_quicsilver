@@ -2,7 +2,6 @@ use bevy_ecs::{
     bundle::Bundle,
     component::{Component, ComponentHooks, StorageType},
     entity::Entity,
-    event::EventWriter,
     query::{Has, QueryData, QueryEntityError},
     system::{Commands, Query, Res},
 };
@@ -59,6 +58,11 @@ pub struct ConnectionEstablished;
 #[derive(Debug, bevy_ecs::event::Event)]
 pub struct ConnectionDrained;
 
+/// An observer trigger that is fired when a [`Connecting`] entity's handshake data becomes available.
+/// After this trigger is fired, [`Connecting::handshake_data()`] will begin returning [`Some`]
+#[derive(Debug, bevy_ecs::event::Event)]
+pub struct HandshakeDataReady;
+
 /// A bundle for adding a new connection to an entity
 #[derive(Debug, Bundle)]
 pub struct ConnectingBundle {
@@ -74,11 +78,6 @@ impl ConnectingBundle {
         }
     }
 }
-
-/// Event raised when a [`Connecting`] entity's handshake data becomes available.
-/// After this event is raised, [`Connecting::handshake_data()`] will begin returning [`Some`]
-#[derive(Debug, bevy_ecs::event::Event)]
-pub struct HandshakeDataReady(pub Entity);
 
 /// Marker component type for connection entities that have not yet been fully established
 /// (i.e. exposed to the user through [`Connecting`])
@@ -795,7 +794,6 @@ pub(crate) fn poll_connections(
         Has<KeepAlive>,
     )>,
     mut endpoint: Query<Endpoint>,
-    mut handshake_events: EventWriter<HandshakeDataReady>,
     time: Res<Time<Real>>,
 ) {
     let now = Instant::now();
@@ -890,7 +888,7 @@ pub(crate) fn poll_connections(
             while let Some(event) = connection.poll() {
                 match event {
                     Event::HandshakeDataReady => {
-                        handshake_events.send(HandshakeDataReady(entity));
+                        commands.trigger_targets(HandshakeDataReady, entity);
                     }
                     Event::Connected => {
                         commands

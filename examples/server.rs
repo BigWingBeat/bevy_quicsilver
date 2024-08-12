@@ -6,7 +6,7 @@ use std::{net::Ipv6Addr, time::Duration};
 use bevy_app::{App, AppExit, ScheduleRunnerPlugin, Startup, Update};
 use bevy_ecs::{
     component::Component,
-    event::{EventReader, EventWriter},
+    event::EventWriter,
     observer::Trigger,
     query::Added,
     system::{Commands, Query},
@@ -33,7 +33,8 @@ fn main() -> AppExit {
             QuicPlugin,
         ))
         .add_systems(Startup, spawn_endpoint)
-        .add_systems(Update, (accept_connections, handle_clients))
+        .add_systems(Update, handle_clients)
+        .observe(accept_connections)
         .observe(connecting_error)
         .observe(connection_established)
         .observe(connection_error)
@@ -98,22 +99,21 @@ fn init_crypto() -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) {
 }
 
 fn accept_connections(
+    trigger: Trigger<NewIncoming>,
     mut commands: Commands,
     new_connections: Query<&Incoming, Added<Incoming>>,
-    mut new_connection_events: EventReader<NewIncoming>,
     mut new_connection_responses: EventWriter<IncomingResponse>,
 ) {
     // When a client tries to connect it starts as an `Incoming` that we must respond to.
     // Here we unconditionally accept connections, but you can also reject or ignore connections,
     // or tell clients to retry with address validation
-    for &NewIncoming(entity) in new_connection_events.read() {
-        let incoming = new_connections.get(entity).unwrap();
-        println!("Client connecting from {}", incoming.remote_address());
-        new_connection_responses.send(IncomingResponse::accept(entity));
-        commands
-            .entity(entity)
-            .insert(ClientState::WaitingForStream);
-    }
+    let entity = trigger.entity();
+    let incoming = new_connections.get(entity).unwrap();
+    println!("Client connecting from {}", incoming.remote_address());
+    new_connection_responses.send(IncomingResponse::accept(entity));
+    commands
+        .entity(entity)
+        .insert(ClientState::WaitingForStream);
 }
 
 fn connecting_error(trigger: Trigger<ConnectingError>, connecting: Query<Connecting>) {
