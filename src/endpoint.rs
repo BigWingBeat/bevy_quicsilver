@@ -4,7 +4,7 @@ use bevy_ecs::{
     bundle::Bundle,
     component::Component,
     entity::Entity,
-    event::{Event, EventWriter},
+    event::Event,
     query::{QueryData, QueryEntityError},
     system::{Commands, Query},
 };
@@ -21,41 +21,9 @@ use crate::{
     socket::UdpSocket,
 };
 
-/// An event that is raised when an endpoint encounters an error
-#[derive(Debug, Event)]
-pub struct EndpointError {
-    /// The endpoint entity that the error happened to
-    pub endpoint: Entity,
-    /// The type of error that occurred
-    pub error: EndpointErrorType,
-}
-
-impl EndpointError {
-    fn malformed_connection_entity(endpoint: Entity, connection: Entity) -> Self {
-        Self {
-            endpoint,
-            error: EndpointErrorType::MalformedConnectionEntity(connection),
-        }
-    }
-
-    fn missing_connection_entity(endpoint: Entity, connection: Entity) -> Self {
-        Self {
-            endpoint,
-            error: EndpointErrorType::MissingConnectionEntity(connection),
-        }
-    }
-
-    fn io_error(endpoint: Entity, error: std::io::Error) -> Self {
-        Self {
-            endpoint,
-            error: EndpointErrorType::IoError(error),
-        }
-    }
-}
-
-/// The type of error that happened to an endpoint whenever an [`EndpointError`] is raised
-#[derive(Debug, Error)]
-pub enum EndpointErrorType {
+/// An observer trigger that is raised when an endpoint encounters an error
+#[derive(Debug, Error, Event)]
+pub enum EndpointError {
     /// A connection entity has had its connection component(s) unexpectedly removed
     #[error("Entity {0} does not have connection components")]
     MalformedConnectionEntity(Entity),
@@ -501,11 +469,10 @@ pub(crate) fn poll_endpoints(
     mut commands: Commands,
     mut endpoint_query: Query<Endpoint>,
     mut connection_query: Query<(Entity, &mut ConnectionImpl)>,
-    mut error_events: EventWriter<EndpointError>,
 ) {
     let now = Instant::now();
     for EndpointItem {
-        entity,
+        entity: endpoint_entity,
         endpoint: mut endpoint_impl,
     } in endpoint_query.iter_mut()
     {
@@ -535,7 +502,8 @@ pub(crate) fn poll_endpoints(
 
                     match connection_query.get_mut(connection_entity) {
                         Ok((_, mut connection)) => {
-                            if connection.handle == handle && connection.endpoint == entity {
+                            if connection.handle == handle && connection.endpoint == endpoint_entity
+                            {
                                 connection.handle_event(event);
                             } else {
                                 // A new connection was inserted onto the entity, overwriting the previous connection
@@ -543,19 +511,19 @@ pub(crate) fn poll_endpoints(
                                 connections.remove(&handle);
                             }
                         }
-                        Err(QueryEntityError::QueryDoesNotMatch(entity)) => {
+                        Err(QueryEntityError::QueryDoesNotMatch(connection_entity)) => {
                             endpoint.handle_event(handle, EndpointEvent::drained());
-                            error_events.send(EndpointError::malformed_connection_entity(
-                                entity,
-                                connection_entity,
-                            ));
+                            commands.trigger_targets(
+                                EndpointError::MalformedConnectionEntity(connection_entity),
+                                endpoint_entity,
+                            );
                         }
-                        Err(QueryEntityError::NoSuchEntity(entity)) => {
+                        Err(QueryEntityError::NoSuchEntity(connection_entity)) => {
                             endpoint.handle_event(handle, EndpointEvent::drained());
-                            error_events.send(EndpointError::missing_connection_entity(
-                                entity,
-                                connection_entity,
-                            ));
+                            commands.trigger_targets(
+                                EndpointError::MissingConnectionEntity(connection_entity),
+                                endpoint_entity,
+                            );
                         }
                         Err(QueryEntityError::AliasedMutability(_)) => unreachable!(),
                     }
@@ -563,7 +531,7 @@ pub(crate) fn poll_endpoints(
                 Some(DatagramEvent::NewConnection(incoming)) => {
                     commands.spawn(Incoming {
                         incoming,
-                        endpoint_entity: entity,
+                        endpoint_entity,
                     });
                 }
                 Some(DatagramEvent::Response(transmit)) => {
@@ -573,7 +541,7 @@ pub(crate) fn poll_endpoints(
             }
         }) {
             // TODO: kill endpoint on I/O error
-            error_events.send(EndpointError::io_error(entity, error));
+            commands.trigger_targets(EndpointError::IoError(error), endpoint_entity);
         }
 
         for (transmit, buffer) in transmits {
@@ -613,12 +581,12 @@ fn udp_transmit<'a>(transmit: &quinn_proto::Transmit, buffer: &'a [u8]) -> quinn
 
 #[cfg(test)]
 mod tests {
-    use std::{net::Ipv6Addr, sync::Arc};
+    use std::{error::Error, net::Ipv6Addr, sync::Arc};
 
-    use bevy_app::{App, PostUpdate};
+    use bevy_app::App;
     use bevy_ecs::{
         entity::Entity,
-        event::{EventReader, Events},
+        event::Events,
         observer::Trigger,
         query::Without,
         system::{ResMut, Resource},
@@ -641,33 +609,12 @@ mod tests {
     #[derive(Debug, Resource, Default)]
     struct ConnectionEstablishedEntities(Vec<Entity>);
 
-    fn panic_on_error_event(
-        mut endpoint: EventReader<EndpointError>,
-        mut connection: EventReader<ConnectionError>,
-        mut incoming: EventReader<IncomingError>,
-    ) {
-        if endpoint.is_empty() && connection.is_empty() && incoming.is_empty() {
-            return;
-        }
-
-        let mut panic_string = format!("Encountered {} entity errors:", endpoint.len());
-        panic_string.extend(
-            endpoint
-                .read()
-                .map(|error| format!("\n    entity {:?}: {}", error.endpoint, error.error))
-                .chain(
-                    connection.read().map(|error| {
-                        format!("\n    entity {:?}: {}", error.connection, error.error)
-                    }),
-                )
-                .chain(
-                    incoming
-                        .read()
-                        .map(|error| format!("\n    entity {:?}: {}", error.incoming, error.error)),
-                ),
+    fn panic_on_error<T: Error>(trigger: Trigger<T>) {
+        panic!(
+            "Entity {} encountered an error: {}",
+            trigger.entity(),
+            trigger.event()
         );
-
-        panic!("{}", panic_string);
     }
 
     fn generate_self_signed() -> CertifiedKey {
@@ -706,15 +653,10 @@ mod tests {
                     entities.0.push(trigger.entity())
                 },
             )
-            .observe(|trigger: Trigger<ConnectingError>| match trigger.event() {
-                ConnectingError::Lost(e) => {
-                    panic!("Connecting entity {} lost: {}", trigger.entity(), e)
-                }
-                ConnectingError::IoError(e) => {
-                    panic!("Connecting entity {} I/O error: {}", trigger.entity(), e)
-                }
-            })
-            .add_systems(PostUpdate, panic_on_error_event);
+            .observe(panic_on_error::<EndpointError>)
+            .observe(panic_on_error::<ConnectingError>)
+            .observe(panic_on_error::<IncomingError>)
+            .observe(panic_on_error::<ConnectionError>);
         app
     }
 

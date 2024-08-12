@@ -12,10 +12,7 @@ use bevy_ecs::{
     system::{Commands, Query},
 };
 use bevy_quicsilver::{
-    connection::{
-        Connecting, ConnectingError, Connection, ConnectionError, ConnectionErrorType,
-        ConnectionEstablished,
-    },
+    connection::{Connecting, ConnectingError, Connection, ConnectionError, ConnectionEstablished},
     endpoint::EndpointBundle,
     Incoming, IncomingResponse, NewIncoming, QuicPlugin,
 };
@@ -36,12 +33,10 @@ fn main() -> AppExit {
             QuicPlugin,
         ))
         .add_systems(Startup, spawn_endpoint)
-        .add_systems(
-            Update,
-            (accept_connections, handle_connection_error, handle_clients),
-        )
+        .add_systems(Update, (accept_connections, handle_clients))
         .observe(connecting_error)
         .observe(connection_established)
+        .observe(connection_error)
         .run()
 }
 
@@ -121,20 +116,6 @@ fn accept_connections(
     }
 }
 
-fn handle_connection_error(
-    connection: Query<Connection>,
-    mut events: EventReader<ConnectionError>,
-) {
-    for event in events.read() {
-        let connection = connection.get(event.connection).unwrap();
-        let address = connection.remote_address();
-        match &event.error {
-            ConnectionErrorType::Lost(e) => println!("Client {address} disconnected: {e}"),
-            ConnectionErrorType::IoError(e) => println!("I/O error: {e}"),
-        }
-    }
-}
-
 fn connecting_error(trigger: Trigger<ConnectingError>, connecting: Query<Connecting>) {
     let connecting = connecting.get(trigger.entity()).unwrap();
     let address = connecting.remote_address();
@@ -148,6 +129,15 @@ fn connection_established(trigger: Trigger<ConnectionEstablished>, connection: Q
     let connection = connection.get(trigger.entity()).unwrap();
     let address = connection.remote_address();
     println!("Connection established with client {address}");
+}
+
+fn connection_error(trigger: Trigger<ConnectionError>, connection: Query<Connection>) {
+    let connection = connection.get(trigger.entity()).unwrap();
+    let address = connection.remote_address();
+    match trigger.event() {
+        ConnectionError::Lost(e) => println!("Client {address} disconnected: {e}"),
+        ConnectionError::IoError(e) => println!("I/O error: {e}"),
+    }
 }
 
 fn handle_clients(mut connection: Query<(Connection, &mut ClientState)>) {

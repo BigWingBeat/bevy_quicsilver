@@ -5,15 +5,14 @@ use std::{net::Ipv6Addr, sync::Arc, time::Duration};
 
 use bevy_app::{App, AppExit, ScheduleRunnerPlugin, Startup, Update};
 use bevy_ecs::{
-    event::{EventReader, EventWriter},
+    event::EventWriter,
     observer::Trigger,
     schedule::IntoSystemConfigs,
     system::{Commands, Query, Res, ResMut, Resource},
 };
 use bevy_quicsilver::{
     connection::{
-        ConnectingError, Connection, ConnectionDrained, ConnectionError, ConnectionErrorType,
-        ConnectionEstablished,
+        ConnectingError, Connection, ConnectionDrained, ConnectionError, ConnectionEstablished,
     },
     endpoint::EndpointBundle,
     Endpoint, QuicPlugin,
@@ -50,7 +49,7 @@ fn main() -> AppExit {
         .add_systems(Startup, (spawn_endpoint, connect_to_server).chain())
         .observe(connecting_error)
         .observe(connection_established)
-        .add_systems(Update, handle_connection_error)
+        .observe(connection_error)
         .add_systems(OnEnter(State::SendDatagrams), send_datagrams)
         .add_systems(OnEnter(State::SpawnStreams), spawn_streams)
         .add_systems(Update, recv_stream.run_if(in_state(State::RecvStream)))
@@ -113,16 +112,6 @@ fn connect_to_server(mut commands: Commands, mut endpoint: Query<Endpoint>) {
     println!("Connecting to server...");
 }
 
-fn handle_connection_error(mut events: EventReader<ConnectionError>) {
-    // `ConnectionError` events are raised for both `Connection` and `Connecting`
-    if let Some(event) = events.read().next() {
-        match &event.error {
-            ConnectionErrorType::Lost(e) => panic!("Connection lost: {}", e),
-            ConnectionErrorType::IoError(e) => panic!("I/O error: {}", e),
-        }
-    }
-}
-
 fn connecting_error(trigger: Trigger<ConnectingError>) {
     // `ConnectingError` is triggered when a new connection fails to be fully established
     match trigger.event() {
@@ -136,6 +125,14 @@ fn connection_established(_: Trigger<ConnectionEstablished>, mut state: ResMut<N
     // and must now be queried for with `Connection` rather than `Connecting`
     state.set(State::SendDatagrams);
     println!("Connection established!");
+}
+
+fn connection_error(trigger: Trigger<ConnectionError>) {
+    // `ConnectionError` is triggered when a connection dies unexpectedly
+    match trigger.event() {
+        ConnectionError::Lost(e) => panic!("Connection lost: {}", e),
+        ConnectionError::IoError(e) => panic!("I/O error: {}", e),
+    }
 }
 
 fn send_datagrams(mut connection: Query<Connection>, mut state: ResMut<NextState<State>>) {

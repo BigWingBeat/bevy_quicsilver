@@ -28,34 +28,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// An event that is raised whenever a [`Connection`] encounters an error
-#[derive(Debug, bevy_ecs::event::Event)]
-pub struct ConnectionError {
-    /// The `Connection` entity that the error happened to
-    pub connection: Entity,
-    /// The type of error that occurred
-    pub error: ConnectionErrorType,
-}
-
-impl ConnectionError {
-    fn lost(connection: Entity, error: quinn_proto::ConnectionError) -> Self {
-        Self {
-            connection,
-            error: ConnectionErrorType::Lost(error),
-        }
-    }
-
-    fn io_error(connection: Entity, error: std::io::Error) -> Self {
-        Self {
-            connection,
-            error: ConnectionErrorType::IoError(error),
-        }
-    }
-}
-
-/// The type of error that happened to a connection whenever a [`ConnectionError`] is raised
-#[derive(Debug, Error)]
-pub enum ConnectionErrorType {
+/// An observer trigger that is raised whenever a [`Connecting`] entity encounters an error
+#[derive(Debug, Error, bevy_ecs::event::Event)]
+pub enum ConnectingError {
     /// The connection was lost
     #[error(transparent)]
     Lost(quinn_proto::ConnectionError),
@@ -64,12 +39,14 @@ pub enum ConnectionErrorType {
     IoError(std::io::Error),
 }
 
-/// An observer trigger that is raised whenever a [`Connecting`] entity encounters an error
-#[derive(Debug, bevy_ecs::event::Event)]
-pub enum ConnectingError {
+/// An observer trigger that is raised whenever a [`Connection`] entity encounters an error
+#[derive(Debug, Error, bevy_ecs::event::Event)]
+pub enum ConnectionError {
     /// The connection was lost
+    #[error(transparent)]
     Lost(quinn_proto::ConnectionError),
     /// The connection has been aborted due to an I/O error
+    #[error(transparent)]
     IoError(std::io::Error),
 }
 
@@ -818,7 +795,6 @@ pub(crate) fn poll_connections(
         Has<KeepAlive>,
     )>,
     mut endpoint: Query<Endpoint>,
-    mut connection_errors: EventWriter<ConnectionError>,
     mut handshake_events: EventWriter<HandshakeDataReady>,
     time: Res<Time<Real>>,
 ) {
@@ -889,7 +865,7 @@ pub(crate) fn poll_connections(
                     Err(error) => {
                         // I/O error
                         if established {
-                            connection_errors.send(ConnectionError::io_error(entity, error));
+                            commands.trigger_targets(ConnectionError::IoError(error), entity);
                         } else {
                             commands.trigger_targets(ConnectingError::IoError(error), entity);
                         }
@@ -924,7 +900,7 @@ pub(crate) fn poll_connections(
                     }
                     Event::ConnectionLost { reason } => {
                         if established {
-                            connection_errors.send(ConnectionError::lost(entity, reason));
+                            commands.trigger_targets(ConnectionError::Lost(reason), entity);
                         } else {
                             commands.trigger_targets(ConnectingError::Lost(reason), entity);
                         }
