@@ -12,7 +12,8 @@ use bevy_ecs::{
 };
 use bevy_quicsilver::{
     connection::{
-        Connection, ConnectionDrained, ConnectionError, ConnectionErrorType, ConnectionEstablished,
+        ConnectingError, Connection, ConnectionDrained, ConnectionError, ConnectionErrorType,
+        ConnectionEstablished,
     },
     endpoint::EndpointBundle,
     Endpoint, QuicPlugin,
@@ -47,8 +48,9 @@ fn main() -> AppExit {
         ))
         .init_state::<State>()
         .add_systems(Startup, (spawn_endpoint, connect_to_server).chain())
-        .add_systems(Update, handle_connection_error)
+        .observe(connecting_error)
         .observe(connection_established)
+        .add_systems(Update, handle_connection_error)
         .add_systems(OnEnter(State::SendDatagrams), send_datagrams)
         .add_systems(OnEnter(State::SpawnStreams), spawn_streams)
         .add_systems(Update, recv_stream.run_if(in_state(State::RecvStream)))
@@ -118,6 +120,14 @@ fn handle_connection_error(mut events: EventReader<ConnectionError>) {
             ConnectionErrorType::Lost(e) => panic!("Connection lost: {}", e),
             ConnectionErrorType::IoError(e) => panic!("I/O error: {}", e),
         }
+    }
+}
+
+fn connecting_error(trigger: Trigger<ConnectingError>) {
+    // `ConnectingError` is triggered when a new connection fails to be fully established
+    match trigger.event() {
+        ConnectingError::Lost(e) => panic!("Failed to connect: {}", e),
+        ConnectingError::IoError(e) => panic!("I/O error: {}", e),
     }
 }
 

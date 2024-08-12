@@ -28,10 +28,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// An event that is raised whenever a [`Connecting`] or [`Connection`] encounters an error
+/// An event that is raised whenever a [`Connection`] encounters an error
 #[derive(Debug, bevy_ecs::event::Event)]
 pub struct ConnectionError {
-    /// The `Connecting` or `Connection` entity that the error happened to
+    /// The `Connection` entity that the error happened to
     pub connection: Entity,
     /// The type of error that occurred
     pub error: ConnectionErrorType,
@@ -61,6 +61,15 @@ pub enum ConnectionErrorType {
     Lost(quinn_proto::ConnectionError),
     /// The connection has been aborted due to an I/O error
     #[error(transparent)]
+    IoError(std::io::Error),
+}
+
+/// An observer trigger that is raised whenever a [`Connecting`] entity encounters an error
+#[derive(Debug, bevy_ecs::event::Event)]
+pub enum ConnectingError {
+    /// The connection was lost
+    Lost(quinn_proto::ConnectionError),
+    /// The connection has been aborted due to an I/O error
     IoError(std::io::Error),
 }
 
@@ -157,7 +166,7 @@ impl ConnectingItem<'_> {
 /// Marker component type for connection entities that are fully established
 /// (i.e. exposed to the user through [`Connection`])
 #[derive(Debug)]
-struct FullyConnected;
+pub(crate) struct FullyConnected;
 
 impl Component for FullyConnected {
     const STORAGE_TYPE: StorageType = StorageType::Table;
@@ -802,14 +811,19 @@ impl ConnectionImpl {
 /// Based on https://github.com/quinn-rs/quinn/blob/0.11.1/quinn/src/connection.rs#L231
 pub(crate) fn poll_connections(
     mut commands: Commands,
-    mut query: Query<(Entity, &mut ConnectionImpl, Has<KeepAlive>)>,
+    mut query: Query<(
+        Entity,
+        &mut ConnectionImpl,
+        Has<FullyConnected>,
+        Has<KeepAlive>,
+    )>,
     mut endpoint: Query<Endpoint>,
     mut connection_errors: EventWriter<ConnectionError>,
     mut handshake_events: EventWriter<HandshakeDataReady>,
     time: Res<Time<Real>>,
 ) {
     let now = Instant::now();
-    for (entity, mut connection, keepalive) in query.iter_mut() {
+    for (entity, mut connection, established, keepalive) in query.iter_mut() {
         let mut endpoint = match endpoint.get_mut(connection.endpoint) {
             Ok(endpoint) => endpoint,
             Err(QueryEntityError::QueryDoesNotMatch(_))
@@ -874,7 +888,11 @@ pub(crate) fn poll_connections(
                     }
                     Err(error) => {
                         // I/O error
-                        connection_errors.send(ConnectionError::io_error(entity, error));
+                        if established {
+                            connection_errors.send(ConnectionError::io_error(entity, error));
+                        } else {
+                            commands.trigger_targets(ConnectingError::IoError(error), entity);
+                        }
                         connection.close(now, 0u32.into(), "I/O Error".into());
                         connection.io_error = true;
                         io_error = true;
@@ -905,14 +923,18 @@ pub(crate) fn poll_connections(
                             .insert(FullyConnected);
                     }
                     Event::ConnectionLost { reason } => {
-                        connection_errors.send(ConnectionError::lost(entity, reason));
+                        if established {
+                            connection_errors.send(ConnectionError::lost(entity, reason));
+                        } else {
+                            commands.trigger_targets(ConnectingError::Lost(reason), entity);
+                        }
                     }
-                    Event::Stream(StreamEvent::Opened { dir }) => {}
-                    Event::Stream(StreamEvent::Readable { id }) => {}
+                    Event::Stream(StreamEvent::Opened { .. }) => {}
+                    Event::Stream(StreamEvent::Readable { .. }) => {}
                     Event::Stream(StreamEvent::Writable { id }) => streams_to_flush.push(id),
-                    Event::Stream(StreamEvent::Finished { id }) => {}
-                    Event::Stream(StreamEvent::Stopped { id, error_code }) => {}
-                    Event::Stream(StreamEvent::Available { dir }) => {}
+                    Event::Stream(StreamEvent::Finished { .. }) => {}
+                    Event::Stream(StreamEvent::Stopped { .. }) => {}
+                    Event::Stream(StreamEvent::Available { .. }) => {}
                     Event::DatagramReceived => {}
                     Event::DatagramsUnblocked => connection.flush_pending_datagrams(),
                 }

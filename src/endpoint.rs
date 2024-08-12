@@ -628,7 +628,9 @@ mod tests {
     use rustls::{pki_types::PrivateKeyDer, RootCertStore};
 
     use crate::{
-        connection::{Connecting, Connection, ConnectionError, ConnectionEstablished},
+        connection::{
+            Connecting, ConnectingError, Connection, ConnectionError, ConnectionEstablished,
+        },
         incoming::{IncomingError, NewIncoming},
         plugin::QuicPlugin,
         Incoming, IncomingResponse,
@@ -696,15 +698,23 @@ mod tests {
 
     fn setup_app() -> App {
         let mut app = App::new();
-        app.add_plugins(QuicPlugin);
-        app.init_resource::<ConnectionEstablishedEntities>();
-        app.observe(
-            |trigger: Trigger<ConnectionEstablished>,
-             mut entities: ResMut<ConnectionEstablishedEntities>| {
-                entities.0.push(trigger.entity())
-            },
-        );
-        app.add_systems(PostUpdate, panic_on_error_event);
+        app.add_plugins(QuicPlugin)
+            .init_resource::<ConnectionEstablishedEntities>()
+            .observe(
+                |trigger: Trigger<ConnectionEstablished>,
+                 mut entities: ResMut<ConnectionEstablishedEntities>| {
+                    entities.0.push(trigger.entity())
+                },
+            )
+            .observe(|trigger: Trigger<ConnectingError>| match trigger.event() {
+                ConnectingError::Lost(e) => {
+                    panic!("Connecting entity {} lost: {}", trigger.entity(), e)
+                }
+                ConnectingError::IoError(e) => {
+                    panic!("Connecting entity {} I/O error: {}", trigger.entity(), e)
+                }
+            })
+            .add_systems(PostUpdate, panic_on_error_event);
         app
     }
 

@@ -12,7 +12,10 @@ use bevy_ecs::{
     system::{Commands, Query},
 };
 use bevy_quicsilver::{
-    connection::{Connection, ConnectionError, ConnectionErrorType, ConnectionEstablished},
+    connection::{
+        Connecting, ConnectingError, Connection, ConnectionError, ConnectionErrorType,
+        ConnectionEstablished,
+    },
     endpoint::EndpointBundle,
     Incoming, IncomingResponse, NewIncoming, QuicPlugin,
 };
@@ -37,6 +40,7 @@ fn main() -> AppExit {
             Update,
             (accept_connections, handle_connection_error, handle_clients),
         )
+        .observe(connecting_error)
         .observe(connection_established)
         .run()
 }
@@ -128,6 +132,15 @@ fn handle_connection_error(
             ConnectionErrorType::Lost(e) => println!("Client {address} disconnected: {e}"),
             ConnectionErrorType::IoError(e) => println!("I/O error: {e}"),
         }
+    }
+}
+
+fn connecting_error(trigger: Trigger<ConnectingError>, connecting: Query<Connecting>) {
+    let connecting = connecting.get(trigger.entity()).unwrap();
+    let address = connecting.remote_address();
+    match trigger.event() {
+        ConnectingError::Lost(e) => println!("Client {address} failed to connect: {e}"),
+        ConnectingError::IoError(e) => println!("I/O error: {e}"),
     }
 }
 
