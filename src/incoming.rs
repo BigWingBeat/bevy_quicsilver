@@ -111,25 +111,24 @@ impl IncomingResponse {
 ///
 /// # Usage
 /// ```
-/// # use bevy_app::{App, Update};
-/// # use bevy_ecs::prelude::{Query, EventReader, EventWriter};
+/// # use bevy_app::App;
+/// # use bevy_ecs::prelude::{Query, EventWriter, Trigger};
 /// # use bevy_quicsilver::{QuicPlugin, Incoming, NewIncoming, IncomingResponse};
 ///
 /// # let mut app = App::new();
 /// # app.add_plugins(QuicPlugin);
-/// # app.add_systems(Update, my_system);
+/// # app.observe(my_observer);
 /// # app.update();
 ///
-/// fn my_system(
+/// fn my_observer(
+///     trigger: Trigger<NewIncoming>,
 ///     query: Query<&Incoming>,
-///     mut incomings: EventReader<NewIncoming>,
 ///     mut responses: EventWriter<IncomingResponse>,
 /// ) {
-///     for &NewIncoming(entity) in incomings.read() {
-///         let incoming = query.get(entity).unwrap();
-///         println!("New client connecting from {:?}", incoming.remote_address());
-///         responses.send(IncomingResponse::accept(entity));
-///     }
+///     let entity = trigger.entity();
+///     let incoming = query.get(entity).unwrap();
+///     println!("New client connecting from {:?}", incoming.remote_address());
+///     responses.send(IncomingResponse::accept(entity));
 /// }
 /// ```
 #[derive(Debug)]
