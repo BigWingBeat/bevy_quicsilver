@@ -21,7 +21,7 @@ use crate::{
     socket::UdpSocket,
 };
 
-/// An observer trigger that is raised when an endpoint encounters an error
+/// An observer trigger that is fired when an endpoint encounters an error
 #[derive(Debug, Error, Event)]
 pub enum EndpointError {
     /// A connection entity has had its connection component(s) unexpectedly removed

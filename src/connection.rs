@@ -28,7 +28,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// An observer trigger that is raised whenever a [`Connecting`] entity encounters an error
+/// An observer trigger that is fired whenever a [`Connecting`] entity encounters an error
 #[derive(Debug, Error, bevy_ecs::event::Event)]
 pub enum ConnectingError {
     /// The connection was lost
@@ -39,7 +39,7 @@ pub enum ConnectingError {
     IoError(std::io::Error),
 }
 
-/// An observer trigger that is raised whenever a [`Connection`] entity encounters an error
+/// An observer trigger that is fired whenever a [`Connection`] entity encounters an error
 #[derive(Debug, Error, bevy_ecs::event::Event)]
 pub enum ConnectionError {
     /// The connection was lost
@@ -50,12 +50,12 @@ pub enum ConnectionError {
     IoError(std::io::Error),
 }
 
-/// An observer trigger that is raised when a connection is successfully established,
+/// An observer trigger that is fired when a connection is successfully established,
 /// and has changed from a [`Connecting`] entity to a [`Connection`] entity
 #[derive(Debug, bevy_ecs::event::Event)]
 pub struct ConnectionEstablished;
 
-/// An observer trigger that is raised when a connection has been fully closed, and is just about to be despawned
+/// An observer trigger that is fired when a connection has been fully closed, and is just about to be despawned
 #[derive(Debug, bevy_ecs::event::Event)]
 pub struct ConnectionDrained;
 
