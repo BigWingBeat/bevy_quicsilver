@@ -15,7 +15,7 @@ use quinn_proto::{ConnectionError, ServerConfig};
 use thiserror::Error;
 
 use crate::{
-    connection::{ConnectingBundle, ConnectionImpl},
+    connection::{ConnectingBundle, ConnectionAccepted, ConnectionImpl},
     endpoint::Endpoint,
     KeepAlive,
 };
@@ -63,7 +63,6 @@ impl IncomingResponse {
     /// Attempt to accept this incoming connection. If no errors occur, the [`Incoming`] component on the specified entity will
     /// be replaced with a [`Connecting`] component
     pub fn accept(entity: Entity) -> Self {
-        // TODO: ConnectionInitialized(?) observer trigger
         Self {
             entity,
             response: IncomingResponseType::Accept(None),
@@ -249,6 +248,9 @@ pub(crate) fn handle_incoming_responses(
                     handle,
                     connection,
                 )));
+                incoming_entity.world_scope(|world| {
+                    world.trigger_targets(ConnectionAccepted, incoming_entity_id)
+                });
             }
             // Connection refused, retried or ignored
             Ok(None) => {

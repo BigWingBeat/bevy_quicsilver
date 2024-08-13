@@ -49,6 +49,11 @@ pub enum ConnectionError {
     IoError(std::io::Error),
 }
 
+/// An observer trigger that is fired when a new incoming connection is accepted,
+/// and has been changed from an [`Incoming`] entity to a [`Connecting`] entity
+#[derive(Debug, bevy_ecs::event::Event)]
+pub struct ConnectionAccepted;
+
 /// An observer trigger that is fired when a connection is successfully established,
 /// and has been changed from a [`Connecting`] entity to a [`Connection`] entity
 #[derive(Debug, bevy_ecs::event::Event)]
