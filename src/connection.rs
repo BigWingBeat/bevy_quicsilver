@@ -50,7 +50,7 @@ pub enum ConnectionError {
 }
 
 /// An observer trigger that is fired when a connection is successfully established,
-/// and has changed from a [`Connecting`] entity to a [`Connection`] entity
+/// and has been changed from a [`Connecting`] entity to a [`Connection`] entity
 #[derive(Debug, bevy_ecs::event::Event)]
 pub struct ConnectionEstablished;
 
@@ -96,7 +96,7 @@ impl Component for StillConnecting {
     }
 }
 
-/// An in-progress connection attempt, that has not yet been fully established
+/// A query parameter for an in-progress connection attempt, that has not yet been fully established
 #[derive(Debug, QueryData)]
 pub struct Connecting {
     marker: &'static StillConnecting,
@@ -104,9 +104,9 @@ pub struct Connecting {
 }
 
 impl ConnectingItem<'_> {
-    /// Parameters negotiated during the handshake
+    /// Parameters negotiated during the handshake.
     ///
-    /// Returns `None` until a [`HandshakeDataReady`] event is raised.
+    /// Returns `None` until the [`HandshakeDataReady`] observer trigger is fired for this entity.
     /// The dynamic type returned is determined by the configured [`Session`].
     /// For the default `rustls` session, it can be [`downcast`](Box::downcast) to a
     /// [`crypto::rustls::HandshakeData`](crate::crypto::rustls::HandshakeData).
@@ -154,7 +154,7 @@ impl Component for FullyConnected {
     }
 }
 
-/// A fully established QUIC connection
+/// A query parameter for a fully established QUIC connection
 #[derive(Debug, QueryData)]
 #[query_data(mutable)]
 pub struct Connection {
@@ -170,8 +170,8 @@ impl ConnectionItem<'_> {
     /// either peer application intentionally closes it, or when either transport layer detects an
     /// error such as a time-out or certificate validation failure.
     ///
-    /// When the connection becomes closed, an [`EntityError`] event is emitted, and after a brief timeout,
-    /// the entity is despawned. If the entity has a [`KeepAlive`] component, only the connection component is removed instead
+    /// When the connection becomes closed, a [`ConnectionError`] event is fired, and after a brief timeout,
+    /// the entity is despawned. If the entity has a [`KeepAlive`] component, only the connection component is removed instead.
     pub fn is_closed(&self) -> bool {
         self.connection.is_closed()
     }
@@ -181,14 +181,14 @@ impl ConnectionItem<'_> {
     /// Pending operations will fail immediately with [`ConnectionError::LocallyClosed`]. Delivery
     /// of data on unfinished streams is not guaranteed, so the application must call this only
     /// when all important communications have been completed, e.g. by calling [`finish`] on
-    /// outstanding [`SendStream`]s and waiting for the resulting futures to complete.
+    /// outstanding [`SendStream`]s and waiting for the streams to become fully closed.
     ///
     /// `error_code` and `reason` are not interpreted, and are provided directly to the peer.
     ///
     /// `reason` will be truncated to fit in a single packet with overhead; to improve odds that it
     /// is preserved in full, it should be kept under 1KiB.
     ///
-    /// [`ConnectionError::LocallyClosed`]: crate::ConnectionError::LocallyClosed
+    /// [`ConnectionError::LocallyClosed`]: quinn_proto::ConnectionError::LocallyClosed
     /// [`finish`]: crate::SendStream::finish
     /// [`SendStream`]: crate::SendStream
     pub fn close(&mut self, error_code: VarInt, reason: Bytes) {
@@ -270,7 +270,7 @@ impl ConnectionItem<'_> {
     /// Transmit `data` as an unreliable, unordered application datagram
     ///
     /// Application datagrams are a low-level primitive. They may be lost or delivered out of order,
-    /// and `data` must both fit inside a single QUIC packet and be smaller than the maximum
+    /// and `data` must both fit inside a single QUIC packet and be smaller than the maximum size
     /// dictated by the peer.
     ///
     /// Previously queued datagrams which are still unsent may be discarded to make space for this datagram,
@@ -324,20 +324,13 @@ impl ConnectionItem<'_> {
         self.connection.remote_address()
     }
 
-    /// The local IP address which was used when the peer established the connection
+    /// The local IP address which was used when the peer established the connection.
     ///
     /// This can be different from the address the endpoint is bound to, in case
     /// the endpoint is bound to a wildcard address like `0.0.0.0` or `::`.
     ///
-    /// This will return `None` for clients.
-    ///
-    /// Retrieving the local IP address is currently supported on the following
-    /// platforms:
-    /// - Linux
-    /// - ???, see https://github.com/quinn-rs/quinn/issues/1864
-    ///
-    /// On all non-supported platforms the local IP address will not be available,
-    /// and the method will return `None`.
+    /// This will return `None` for clients, or when the platform does not expose this
+    /// information. See [`quinn_udp::RecvMeta::dst_ip`] for a list of supported platforms
     pub fn local_ip(&self) -> Option<IpAddr> {
         self.connection.local_ip()
     }
@@ -418,7 +411,7 @@ impl ConnectionReadOnlyItem<'_> {
     /// either peer application intentionally closes it, or when either transport layer detects an
     /// error such as a time-out or certificate validation failure.
     ///
-    /// When the connection becomes closed, an [`EntityError`] event is emitted, and after a brief timeout,
+    /// When the connection becomes closed, a [`ConnectionError`] event is fired, and after a brief timeout,
     /// the entity is despawned. If the entity has a [`KeepAlive`] component, only the connection component is removed instead
     pub fn is_closed(&self) -> bool {
         self.connection.is_closed()
@@ -432,20 +425,13 @@ impl ConnectionReadOnlyItem<'_> {
         self.connection.remote_address()
     }
 
-    /// The local IP address which was used when the peer established the connection
+    /// The local IP address which was used when the peer established the connection.
     ///
     /// This can be different from the address the endpoint is bound to, in case
     /// the endpoint is bound to a wildcard address like `0.0.0.0` or `::`.
     ///
-    /// This will return `None` for clients.
-    ///
-    /// Retrieving the local IP address is currently supported on the following
-    /// platforms:
-    /// - Linux
-    /// - ???, see https://github.com/quinn-rs/quinn/issues/1864
-    ///
-    /// On all non-supported platforms the local IP address will not be available,
-    /// and the method will return `None`.
+    /// This will return `None` for clients, or when the platform does not expose this
+    /// information. See [`quinn_udp::RecvMeta::dst_ip`] for a list of supported platforms
     pub fn local_ip(&self) -> Option<IpAddr> {
         self.connection.local_ip()
     }
@@ -524,6 +510,7 @@ impl Component for ConnectionImpl {
     fn register_component_hooks(hooks: &mut ComponentHooks) {
         hooks
             .on_insert(|mut world, entity, _component_id| {
+                // Bookkeeping so the endpoint knows the entity we're on
                 let connection = world.get::<Self>(entity).unwrap();
                 let handle = connection.handle;
                 let Some(mut endpoint) = world.get_mut::<EndpointImpl>(connection.endpoint) else {

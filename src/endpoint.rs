@@ -35,7 +35,7 @@ pub enum EndpointError {
     IoError(std::io::Error),
 }
 
-/// A bundle for adding an [`Endpoint`] to an entity
+/// A bundle for adding an [`Endpoint`] to an entity, and the main entrypoint into the library.
 #[derive(Debug, Bundle)]
 pub struct EndpointBundle(EndpointImpl);
 
@@ -117,7 +117,7 @@ impl EndpointBundle {
     }
 }
 
-/// A QUIC endpoint.
+/// A query parameter for a QUIC endpoint.
 ///
 /// An endpoint corresponds to a single UDP socket, may host many connections,
 /// and may act as both client and server for different connections.
@@ -166,12 +166,10 @@ impl EndpointItem<'_> {
     }
 
     /// Initiate a connection with the remote endpoint identified by the specified address and server name,
-    /// using the default client config. The returned [`ConnectionBundle`] should be inserted onto an entity.
+    /// using the default client config. The returned [`ConnectionBundle`] must be inserted onto an entity.
     ///
     /// The exact value of the `server_name` parameter must be included in the `subject_alt_names` field of the server's certificate,
-    /// as described by [`config_with_gen_self_signed`].
-    ///
-    /// [config_with_gen_self_signed]: crate::crypto::server::config_with_gen_self_signed
+    /// as described by [`rcgen::generate_simple_self_signed`].
     pub fn connect(
         &mut self,
         server_address: SocketAddr,
@@ -182,12 +180,10 @@ impl EndpointItem<'_> {
     }
 
     /// Initiate a connection with the remote endpoint identified by the specified address and server name,
-    /// using the specified client config. The returned [`ConnectionBundle`] should be inserted onto an entity.
+    /// using the specified client config. The returned [`ConnectionBundle`] must be inserted onto an entity.
     ///
     /// The exact value of the `server_name` parameter must be included in the `subject_alt_names` field of the server's certificate,
-    /// as described by [`config_with_gen_self_signed`].
-    ///
-    /// [config_with_gen_self_signed]: crate::crypto::server::config_with_gen_self_signed
+    /// as described by [`rcgen::generate_simple_self_signed`].
     pub fn connect_with(
         &mut self,
         server_address: SocketAddr,
@@ -496,6 +492,7 @@ pub(crate) fn poll_endpoints(
                 &mut response_buffer,
             ) {
                 Some(DatagramEvent::ConnectionEvent(handle, event)) => {
+                    // TODO: don't panic if bundle just hasn't been inserted onto an entity yet
                     let &connection_entity = connections
                         .get(&handle)
                         .expect("ConnectionHandle {handle:?} is missing Entity mapping");

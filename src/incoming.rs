@@ -42,6 +42,15 @@ pub enum IncomingError {
 #[derive(Debug, Event)]
 pub struct NewIncoming;
 
+/// How to respond to an incoming client connection.
+///
+/// Errors if the specified entity does not exist, or does not have an [`Incoming`] component
+#[derive(Debug, Clone, Event)]
+pub struct IncomingResponse {
+    entity: Entity,
+    response: IncomingResponseType,
+}
+
 #[derive(Debug, Clone)]
 enum IncomingResponseType {
     Accept(Option<Arc<ServerConfig>>),
@@ -50,19 +59,11 @@ enum IncomingResponseType {
     Ignore,
 }
 
-/// How to respond to an incoming client connection.
-///
-/// Errors if the specified entity does not have an [`Incoming`] component
-#[derive(Debug, Clone, Event)]
-pub struct IncomingResponse {
-    entity: Entity,
-    response: IncomingResponseType,
-}
-
 impl IncomingResponse {
     /// Attempt to accept this incoming connection. If no errors occur, the [`Incoming`] component on the specified entity will
     /// be replaced with a [`Connecting`] component
     pub fn accept(entity: Entity) -> Self {
+        // TODO: ConnectionInitialized(?) observer trigger
         Self {
             entity,
             response: IncomingResponseType::Accept(None),
@@ -78,7 +79,8 @@ impl IncomingResponse {
         }
     }
 
-    /// Reject this incoming connection. The specified entity will be despawned, unless it has a [`KeepAlive`] component
+    /// Reject this incoming connection. The specified entity will be despawned, unless it has a [`KeepAlive`] component,
+    /// in which case only the [`Incoming`] component will be removed from it.
     pub fn refuse(entity: Entity) -> Self {
         Self {
             entity,
@@ -89,7 +91,8 @@ impl IncomingResponse {
     /// Respond with a retry packet, requiring the client to retry with address validation.
     ///
     /// Errors if [`Incoming::remote_address_validated()`] is true,
-    /// otherwise despawns the specified entity, unless it has a [`KeepAlive`] component
+    /// otherwise despawns the specified entity, unless it has a [`KeepAlive`] component,
+    /// in which case only the [`Incoming`] component will be removed from it.
     pub fn retry(entity: Entity) -> Self {
         Self {
             entity,
@@ -98,7 +101,8 @@ impl IncomingResponse {
     }
 
     /// Ignore this incoming connection attempt, not sending any packet in response.
-    /// The specified entity will be despawned, unless it has a [`KeepAlive`] component
+    /// The specified entity will be despawned, unless it has a [`KeepAlive`] component,
+    /// in which case only the [`Incoming`] component will be removed from it.
     pub fn ignore(entity: Entity) -> Self {
         Self {
             entity,
@@ -127,8 +131,12 @@ impl IncomingResponse {
 /// ) {
 ///     let entity = trigger.entity();
 ///     let incoming = query.get(entity).unwrap();
-///     println!("New client connecting from {:?}", incoming.remote_address());
-///     responses.send(IncomingResponse::accept(entity));
+///     if incoming.remote_address_validated() {
+///         println!("New client connecting from {:?}", incoming.remote_address());
+///         responses.send(IncomingResponse::accept(entity));
+///     } else {
+///         respones.send(IncomingResponse::retry(entity));
+///     }
 /// }
 /// ```
 #[derive(Debug)]
@@ -196,6 +204,7 @@ pub(crate) fn handle_incoming_responses(
 
         let incoming_entity_id = incoming_entity.id();
 
+        // Remove the Incoming component immediately, as there are no responses that retain it
         let Some(incoming) = incoming_entity.take::<Incoming>() else {
             world.trigger_targets(IncomingError::MalformedEntity, incoming_entity_id);
             continue;

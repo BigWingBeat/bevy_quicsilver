@@ -18,6 +18,7 @@ impl Plugin for QuicPlugin {
             app.add_plugins(TimePlugin);
         }
 
+        // System ordering assumes relevant user code runs in Update
         app.add_event::<NewIncoming>()
             .add_event::<IncomingResponse>()
             .add_event::<EndpointError>()

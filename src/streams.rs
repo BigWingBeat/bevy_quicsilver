@@ -53,8 +53,8 @@ impl<'a> SendStream<'a> {
 
     /// Check if the stream was stopped by the peer, get the reason if it was
     ///
-    /// Returns `Some` with the stop error code when the stream is stopped by the peer.
-    /// Returns `None` if the stream is still alive and has not been stopped.
+    /// Returns `Ok(Some(_))` with the stop error code when the stream is stopped by the peer.
+    /// Returns `Ok(None)` if the stream is still alive and has not been stopped.
     /// Returns `Err` when the stream is [`finish()`](Self::finish)ed or [`reset()`] locally and all stream data has been
     /// received (but not necessarily processed) by the peer, after which it is no longer meaningful
     /// for the stream to be stopped.
@@ -158,6 +158,7 @@ impl<'a> RecvStream<'a> {
     ///
     /// [`next()`]: Chunks::next
     pub fn read(&mut self, ordered: bool) -> Result<Chunks<'_>, ReadableError> {
+        // TODO: wrapper type around chunks
         self.proto_stream.read(ordered)
     }
 
