@@ -166,10 +166,11 @@ impl EndpointItem<'_> {
     }
 
     /// Initiate a connection with the remote endpoint identified by the specified address and server name,
-    /// using the default client config. The returned [`ConnectionBundle`] must be inserted onto an entity.
+    /// using the default client config.
     ///
     /// The exact value of the `server_name` parameter must be included in the `subject_alt_names` field of the server's certificate,
     /// as described by [`rcgen::generate_simple_self_signed`].
+    #[must_use = "Connections are components and do nothing if not spawned or inserted onto an entity"]
     pub fn connect(
         &mut self,
         server_address: SocketAddr,
@@ -180,10 +181,11 @@ impl EndpointItem<'_> {
     }
 
     /// Initiate a connection with the remote endpoint identified by the specified address and server name,
-    /// using the specified client config. The returned [`ConnectionBundle`] must be inserted onto an entity.
+    /// using the specified client config.
     ///
     /// The exact value of the `server_name` parameter must be included in the `subject_alt_names` field of the server's certificate,
     /// as described by [`rcgen::generate_simple_self_signed`].
+    #[must_use = "Connections are components and do nothing if not spawned or inserted onto an entity"]
     pub fn connect_with(
         &mut self,
         server_address: SocketAddr,
@@ -492,7 +494,6 @@ pub(crate) fn poll_endpoints(
                 &mut response_buffer,
             ) {
                 Some(DatagramEvent::ConnectionEvent(handle, event)) => {
-                    // TODO: don't panic if bundle just hasn't been inserted onto an entity yet
                     let &connection_entity = connections
                         .get(&handle)
                         .expect("ConnectionHandle {handle:?} is missing Entity mapping");
