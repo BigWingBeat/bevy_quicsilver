@@ -13,7 +13,6 @@ pub mod connection;
 pub mod crypto;
 pub mod endpoint;
 pub mod incoming;
-pub mod ip;
 mod plugin;
 mod socket;
 pub mod streams;
