@@ -158,7 +158,7 @@ fn handle_clients(mut connection: Query<(Connection, &mut ClientState)>) {
             ClientState::GotStream(stream) => {
                 let mut send = connection.send_stream(stream).unwrap();
                 let data = "Server Stream Data";
-                send.write(data.as_bytes()).unwrap();
+                send.write_all(data.as_bytes()).unwrap();
                 send.finish().unwrap();
                 *state = ClientState::Receiving(stream);
             }

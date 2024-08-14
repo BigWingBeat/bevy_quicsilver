@@ -158,7 +158,7 @@ fn spawn_streams(
     let stream = connection.open_bi().unwrap();
     let mut send = connection.send_stream(stream).unwrap();
     let data = "Client Stream Data";
-    send.write(data.as_bytes()).unwrap();
+    send.write_all(data.as_bytes()).unwrap();
     send.finish().unwrap();
     commands.insert_resource(Stream(stream));
     state.set(State::RecvStream);

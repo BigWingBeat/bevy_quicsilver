@@ -1,5 +1,7 @@
 use bytes::Bytes;
-use quinn_proto::{Chunks, ClosedStream, FinishError, ReadableError, StreamId, VarInt, WriteError};
+use quinn_proto::{
+    Chunks, ClosedStream, FinishError, ReadableError, StreamId, VarInt, WriteError, Written,
+};
 
 /// A stream that can only be used to send data.
 pub struct SendStream<'a> {
@@ -14,8 +16,19 @@ impl<'a> SendStream<'a> {
         self.id
     }
 
-    /// Send data on the stream
-    pub fn write(&mut self, data: &[u8]) -> Result<(), WriteError> {
+    /// Write data to the stream.
+    ///
+    /// Returns the number of bytes written on success. Congestion and flow control may cause this to
+    /// be shorter than `data.len()`, indicating that only a prefix of `data` was written.
+    pub fn write(&mut self, data: &[u8]) -> Result<usize, WriteError> {
+        self.proto_stream.write(data)
+    }
+
+    /// Convenience method to write an entire buffer to the stream.
+    ///
+    /// Data that could not be written immediately will be internally buffered instead,
+    /// and automatically flushed when the stream becomes writeable again.
+    pub fn write_all(&mut self, data: &[u8]) -> Result<(), WriteError> {
         match self.proto_stream.write(data) {
             Ok(written) => {
                 let remaining = data.len() - written;
@@ -29,25 +42,46 @@ impl<'a> SendStream<'a> {
                 self.write_buffer.push(Bytes::copy_from_slice(data));
                 Ok(())
             }
-            result => result.map(|_| ()),
+            Err(e) => Err(e),
         }
     }
 
-    /// Send data on the stream
+    /// Write chunks of data to the stream. Slighty more efficient than `write` due to not copying.
     ///
-    /// Slightly more efficient than `write` due to not copying
-    pub fn write_chunks(&mut self, data: &mut [Bytes]) -> Result<(), WriteError> {
+    /// Returns the number of bytes and chunks written on success. Congestion and flow control may cause this to
+    /// be shorter than `data.len()`, indicating that only a prefix of `data` was written.
+    /// Note that this method might also write a partial chunk. In this case
+    /// [`Written::chunks`] will not count this chunk as fully written,
+    /// and the chunk will be advanced and contain only non-written data after the call.
+    pub fn write_chunks(&mut self, data: &mut [Bytes]) -> Result<Written, WriteError> {
+        self.proto_stream.write_chunks(data)
+    }
+
+    /// Convenience method to write a single chunk in its entirety to the stream.
+    ///
+    /// Data that could not be written immediately will be internally buffered instead,
+    /// and automatically flushed when the stream becomes writeable again.
+    pub fn write_chunk(&mut self, data: Bytes) -> Result<(), WriteError> {
+        self.write_all_chunks(&mut [data])
+    }
+
+    /// Convenience method to write an entire list of chunks to the stream.
+    ///
+    /// Data that could not be written immediately will be internally buffered instead,
+    /// and automatically flushed when the stream becomes writeable again.
+    pub fn write_all_chunks(&mut self, data: &mut [Bytes]) -> Result<(), WriteError> {
         match self.proto_stream.write_chunks(data) {
-            Ok(_) => {
-                self.write_buffer
-                    .extend(data.iter().filter(|&bytes| !bytes.is_empty()).cloned());
+            Ok(written) => {
+                self.write_buffer.extend_from_slice(&data[written.chunks..]);
+                // self.write_buffer
+                //     .extend(data.iter().filter(|&bytes| !bytes.is_empty()).cloned());
                 Ok(())
             }
             Err(WriteError::Blocked) => {
                 self.write_buffer.extend_from_slice(data);
                 Ok(())
             }
-            result => result.map(|_| ()),
+            Err(e) => Err(e),
         }
     }
 
