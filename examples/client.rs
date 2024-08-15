@@ -182,7 +182,10 @@ fn recv_stream(
                 println!("Received from server: '{}'", data);
             }
             // The stream was finished by the server (In this example we know this will always happen)
-            Ok(None) => state.set(State::Closing),
+            Ok(None) => {
+                state.set(State::Closing);
+                break;
+            }
             // We have read all currently available data, and must wait for more to arrive
             Err(RecvError::Blocked) => break,
             // This would happen if we tried to use the stream again after it had been stopped, finished or reset,
