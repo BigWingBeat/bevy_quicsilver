@@ -1,18 +1,18 @@
 [package]
 name = "bevy_quicsilver"
 version = "0.1.1"
-authors = ["Pixelstorm"]
+authors = ["BigWingBeat"]
 edition = "2021"
 description = "Implementation of the QUIC transport protocol for bevy_ecs, using quinn_proto"
-repository = "https://github.com/Pixelstormer/bevy_quicsilver"
+repository = "https://github.com/BigWingBeat/bevy_quicsilver"
 license = "Apache-2.0"
 keywords = ["bevy", "quic", "gamedev", "networking"]
 categories = ["game-development", "network-programming"]
 
 [dependencies]
-bevy_app = { git = "https://github.com/Pixelstormer/bevy", branch = "fork-main", default-features = false }
-bevy_ecs = { git = "https://github.com/Pixelstormer/bevy", branch = "fork-main", default-features = false }
-bevy_time = { git = "https://github.com/Pixelstormer/bevy", branch = "fork-main", default-features = false }
+bevy_app = { git = "https://github.com/BigWingBeat/bevy", branch = "fork-main", default-features = false }
+bevy_ecs = { git = "https://github.com/BigWingBeat/bevy", branch = "fork-main", default-features = false }
+bevy_time = { git = "https://github.com/BigWingBeat/bevy", branch = "fork-main", default-features = false }
 hashbrown = "0.14"
 bytes = "1.6"
 thiserror = "1.0"
@@ -24,7 +24,7 @@ tracing = { version = "0.1", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 directories = "5.0"
-bevy_state = { git = "https://github.com/Pixelstormer/bevy", branch = "fork-main", default-features = false, features = [
+bevy_state = { git = "https://github.com/BigWingBeat/bevy", branch = "fork-main", default-features = false, features = [
 	"bevy_app",
 ] }
 
