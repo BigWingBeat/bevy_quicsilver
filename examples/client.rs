@@ -15,6 +15,7 @@ use bevy_quicsilver::{
         ConnectingError, Connection, ConnectionDrained, ConnectionError, ConnectionEstablished,
     },
     endpoint::EndpointBundle,
+    streams::RecvError,
     Endpoint, QuicPlugin,
 };
 use bevy_state::{
@@ -22,7 +23,7 @@ use bevy_state::{
     prelude::in_state,
     state::{NextState, OnEnter, States},
 };
-use quinn_proto::{ClientConfig, ReadableError, StreamId, VarInt};
+use quinn_proto::{ClientConfig, StreamId, VarInt};
 use rustls::{pki_types::CertificateDer, RootCertStore};
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash, States)]
@@ -171,18 +172,28 @@ fn recv_stream(
 ) {
     let mut connection = connection.get_single_mut().unwrap();
     let mut recv = connection.recv_stream(id.0).unwrap();
-    match recv.read(true) {
-        Ok(mut chunks) => {
-            // Recieved chunks do not correspond to peer writes, so cannot be used for framing
-            while let Ok(Some(chunk)) = chunks.next(usize::MAX) {
+
+    loop {
+        match recv.read_chunk(usize::MAX, true) {
+            // Successfully read some data from the stream
+            Ok(Some(chunk)) => {
+                // Recieved chunks do not correspond to peer writes, so cannot be used for framing
                 let data = String::from_utf8_lossy(&chunk.bytes);
                 println!("Received from server: '{}'", data);
             }
-            let _ = chunks.finalize();
-        }
-        Err(ReadableError::ClosedStream) => state.set(State::Closing),
-        Err(ReadableError::IllegalOrderedRead) => unreachable!(),
-    };
+            // The stream was finished by the server (In this example we know this will always happen)
+            Ok(None) => state.set(State::Closing),
+            // We have read all currently available data, and must wait for more to arrive
+            Err(RecvError::Blocked) => break,
+            // This would happen if we tried to use the stream again after it had been stopped, finished or reset,
+            // or if we tried to use a stream that doesn't exist
+            Err(e @ RecvError::ClosedStream) => panic!("{e}"),
+            // This can only happen if we do unordered reads, which we don't
+            Err(RecvError::IllegalOrderedRead) => unreachable!(),
+            // The stream was reset by the server (In this example we know that doesn't happen)
+            Err(e @ RecvError::Reset(_)) => panic!("{e}"),
+        };
+    }
 }
 
 fn close_connection(mut connection: Query<Connection>) {

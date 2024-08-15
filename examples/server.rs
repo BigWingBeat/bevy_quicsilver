@@ -164,13 +164,12 @@ fn handle_clients(mut connection: Query<(Connection, &mut ClientState)>) {
             }
             ClientState::Receiving(stream) => {
                 let mut recv = connection.recv_stream(stream).unwrap();
-                if let Ok(mut chunks) = recv.read(true) {
-                    while let Ok(Some(chunk)) = chunks.next(usize::MAX) {
-                        let data = String::from_utf8_lossy(&chunk.bytes);
-                        println!("Recieved from {address}: '{}'", data);
-                    }
-                    let _ = chunks.finalize();
-                };
+
+                while let Ok(Some(chunk)) = recv.read_chunk(usize::MAX, true) {
+                    // Recieved chunks do not correspond to peer writes, so cannot be used for framing
+                    let data = String::from_utf8_lossy(&chunk.bytes);
+                    println!("Received from {address}: '{}'", data);
+                }
             }
         }
     }

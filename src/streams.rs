@@ -1,7 +1,9 @@
 use bytes::Bytes;
 use quinn_proto::{
-    Chunks, ClosedStream, FinishError, ReadableError, StreamId, VarInt, WriteError, Written,
+    Chunk, ClosedStream, FinishError, ReadError, ReadableError, StreamId, VarInt, WriteError,
+    Written,
 };
+use thiserror::Error;
 
 /// A stream that can only be used to send data.
 pub struct SendStream<'a> {
@@ -164,25 +166,113 @@ pub struct RecvStream<'a> {
     pub(crate) proto_stream: quinn_proto::RecvStream<'a>,
 }
 
+/// Errors that can occur when reading data from a [`RecvStream`]
+#[derive(Debug, Error)]
+pub enum RecvError {
+    /// No more data is currently available on this stream.
+    ///
+    /// If more data on this stream is received from the peer, an `Event::StreamReadable` will be
+    /// generated for this stream, indicating that retrying the read might succeed.
+    #[error("Stream blocked")]
+    Blocked,
+    /// The peer abandoned transmitting data on this stream, by calling [`SendStream::reset()`].
+    /// Includes an application-defined error code
+    #[error("Stream reset by peer. Error code: {0}")]
+    Reset(VarInt),
+    /// The stream does not exist, or has already been stopped, finished or reset
+    #[error("Stream does not exist or has been closed")]
+    ClosedStream,
+    /// Attempted an ordered read following an unordered read.
+    ///
+    /// Performing an unordered read allows discontinuities to arise
+    /// in the receive buffer of a stream which cannot be recovered,
+    /// making further ordered reads impossible.
+    #[error("Attempted an ordered read following an unordered read")]
+    IllegalOrderedRead,
+}
+
+impl From<ReadError> for RecvError {
+    fn from(e: ReadError) -> Self {
+        match e {
+            ReadError::Blocked => Self::Blocked,
+            ReadError::Reset(e) => Self::Reset(e),
+        }
+    }
+}
+
+impl From<ReadableError> for RecvError {
+    fn from(e: ReadableError) -> Self {
+        match e {
+            ReadableError::ClosedStream => Self::ClosedStream,
+            ReadableError::IllegalOrderedRead => Self::IllegalOrderedRead,
+        }
+    }
+}
+
+/// Hack to automatically call finalize on quinn chunks before dropping them, because otherwise they panic.
+/// finalize consumes self but drop gives you &mut self, so Option::take is needed to make this work.
+/// This makes writing functions that use chunks way better as you don't need to put calls to finalize everywhere
+struct Chunks<'a>(Option<quinn_proto::Chunks<'a>>);
+
+impl Chunks<'_> {
+    fn next(&mut self, max_length: usize) -> Result<Option<Chunk>, ReadError> {
+        self.0.as_mut().unwrap().next(max_length)
+    }
+}
+
+impl<'a> From<quinn_proto::Chunks<'a>> for Chunks<'a> {
+    fn from(chunks: quinn_proto::Chunks<'a>) -> Self {
+        Self(Some(chunks))
+    }
+}
+
+impl Drop for Chunks<'_> {
+    fn drop(&mut self) {
+        let _ = self.0.take().unwrap().finalize();
+    }
+}
+
 impl<'a> RecvStream<'a> {
     /// Get the ID of the stream
     pub fn id(&self) -> StreamId {
         self.id
     }
 
-    /// Read data from the stream
+    /// Read data contiguously from the stream.
     ///
-    /// `ordered` will make sure the returned chunk's offset will have an offset exactly equal to
-    /// the previously returned offset plus the previously returned bytes' length.
-    /// Unordered reads are less prone to head-of-line blocking within a stream,
+    /// Returns the number of bytes read into `buf` on success, or `Ok(None)` if the stream was [`finish()`]ed.
+    ///
+    /// [`finish()`]: SendStream::finish()
+    pub fn read(&mut self, mut buf: &mut [u8]) -> Result<Option<usize>, RecvError> {
+        let mut chunks: Chunks = self.proto_stream.read(true)?.into();
+
+        let mut read = 0;
+        while !buf.is_empty() {
+            match chunks.next(buf.len()) {
+                // There is more data to read
+                Ok(Some(chunk)) => {
+                    // This can't panic because the chunk length is capped to the buf length
+                    let len = chunk.bytes.len();
+                    buf[..len].copy_from_slice(&chunk.bytes);
+                    buf = &mut buf[len..];
+                    read += len;
+                }
+                _ if read > 0 => break, // Successfully read some data, the error will propagate on the next read call
+                Ok(None) => return Ok(None), // Stream finished
+                Err(e) => return Err(e.into()), // No data or stream reset
+            }
+        }
+
+        Ok(Some(read))
+    }
+
+    /// Read the next chunk of data from the stream. Slightly more efficient than `read` due to not copying.
+    ///
+    /// Returns `Ok(None)` if the stream was [`finish()`]ed. Otherwise, returns a chunk of data and its offset in the stream.
+    /// If `ordered` is `true`, the chunk's offset will be immediately after the last data read from the stream.
+    /// If `ordered` is `false`, chunks may be received in any order, and the chunk's offset can be used to determine
+    /// ordering in the caller. Unordered reads are less prone to head-of-line blocking within a stream,
     /// but require the application to manage reassembling the original data.
-    ///
-    /// The `max_length` parameter of [`next()`] on the returned [`Chunks`] limits the maximum size
-    /// of the returned `Bytes` value; passing `usize::MAX` will yield the best performance.
-    ///
-    /// `Chunks::next()` returns `Ok(None)` if the stream was finished. Otherwise, returns a segment of data and its
-    /// offset in the stream. If `ordered` is `false`, segments may be received in any order, and
-    /// the `Chunk`'s `offset` field can be used to determine ordering in the caller.
     ///
     /// While most applications will prefer to consume stream data in order, unordered reads can
     /// improve performance when packet loss occurs and data cannot be retransmitted before the flow
@@ -190,10 +280,46 @@ impl<'a> RecvStream<'a> {
     /// reads, but ordered reads on streams that have seen previous unordered reads will return
     /// `ReadError::IllegalOrderedRead`.
     ///
-    /// [`next()`]: Chunks::next
-    pub fn read(&mut self, ordered: bool) -> Result<Chunks<'_>, ReadableError> {
-        // TODO: wrapper type around chunks
-        self.proto_stream.read(ordered)
+    /// The `max_length` parameter limits the maximum size of the returned `Bytes` value;
+    /// passing `usize::MAX` will yield the best performance.
+    /// Chunk boundaries do not correspond to peer writes, and hence cannot be used as framing.
+    ///
+    /// [`finish()`]: SendStream::finish()
+    pub fn read_chunk(
+        &mut self,
+        max_length: usize,
+        ordered: bool,
+    ) -> Result<Option<Chunk>, RecvError> {
+        let mut chunks: Chunks = self.proto_stream.read(ordered)?.into();
+        chunks.next(max_length).map_err(Into::into)
+    }
+
+    /// Read ordered chunks of data from the stream.
+    ///
+    /// Fills `bufs` with chunks of data read contiguously from the stream,
+    /// returning how many chunks were read on success, or returns `Ok(None)` if the stream was [`finish()`]ed.
+    ///
+    /// Chunk boundaries do not correspond to peer writes, and hence cannot be used as framing.
+    ///
+    /// [`finish()`]: SendStream::finish()
+    pub fn read_chunks(&mut self, bufs: &mut [Bytes]) -> Result<Option<usize>, RecvError> {
+        let mut chunks: Chunks = self.proto_stream.read(true)?.into();
+
+        let mut read = 0;
+        while read < bufs.len() {
+            match chunks.next(usize::MAX) {
+                // There is more data to read
+                Ok(Some(chunk)) => {
+                    bufs[read] = chunk.bytes;
+                    read += 1;
+                }
+                _ if read > 0 => break, // Successfully read some data, the error will propagate on the next read call
+                Ok(None) => return Ok(None), // Stream finished
+                Err(e) => return Err(e.into()), // No data or stream reset
+            }
+        }
+
+        Ok(Some(read))
     }
 
     /// Stop accepting data
