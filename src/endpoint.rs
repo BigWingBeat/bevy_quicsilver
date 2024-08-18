@@ -5,7 +5,7 @@ use bevy_ecs::{
     component::Component,
     entity::Entity,
     event::Event,
-    query::{QueryData, QueryEntityError},
+    query::{Has, QueryData, QueryEntityError},
     system::{Commands, Query},
 };
 use hashbrown::HashMap;
@@ -19,6 +19,7 @@ use crate::{
     connection::{ConnectingBundle, ConnectionImpl},
     incoming::Incoming,
     socket::UdpSocket,
+    KeepAlive,
 };
 
 /// An observer trigger that is fired when an endpoint encounters an error
@@ -465,14 +466,17 @@ impl EndpointImpl {
 
 pub(crate) fn poll_endpoints(
     mut commands: Commands,
-    mut endpoint_query: Query<Endpoint>,
+    mut endpoint_query: Query<(Endpoint, Has<KeepAlive>)>,
     mut connection_query: Query<(Entity, &mut ConnectionImpl)>,
 ) {
     let now = Instant::now();
-    for EndpointItem {
-        entity: endpoint_entity,
-        endpoint: mut endpoint_impl,
-    } in endpoint_query.iter_mut()
+    for (
+        EndpointItem {
+            entity: endpoint_entity,
+            endpoint: mut endpoint_impl,
+        },
+        keepalive,
+    ) in endpoint_query.iter_mut()
     {
         let EndpointImpl {
             endpoint,
@@ -538,8 +542,12 @@ pub(crate) fn poll_endpoints(
                 None => {}
             }
         }) {
-            // TODO: kill endpoint on I/O error
             commands.trigger_targets(EndpointError::IoError(error), endpoint_entity);
+            if keepalive {
+                commands.entity(endpoint_entity).remove::<EndpointImpl>();
+            } else {
+                commands.entity(endpoint_entity).despawn();
+            }
         }
 
         for (transmit, buffer) in transmits {
