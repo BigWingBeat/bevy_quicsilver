@@ -13,17 +13,15 @@ This library is still very new and in active development. Although most of the c
 
 ## Supported Bevy Versions
 
-- `0.13.*`
+- `0.15.*`
 
 ## Features
 
-Ultimately, `bevy_quicsilver` doesn't offer anything more complicated than sending and receiving raw bytes. It is intended to be a foundation ontop of which other libraries implement higher-level features, by abstracting the complexity of the transport protocol behind an ecs-based API.
-
-That is not to say it is entirely barebones though, as a large part of the appeal of QUIC as a transport protocol for games is the wide variety of desireable features that are baked into the spec:
-- Both unreliable messages and reliable-ordered streams
+- Both unreliable-unordered messages and reliable-ordered streams
 - Pluggable cryptography, with a standard implementation powered by [rustls](https://github.com/rustls/rustls) and [*ring*](https://github.com/briansmith/ring)
 - Head-of-line blocking control and stream bandwidth sharing
 - Simultaneous client/server operation
 - IPv4 and IPv6 support
 - Cross-platform
 
+`bevy_quicsilver` is a low-level networking library that offers granular control over connections and data transfer. Implementing higher-level features such as ser/deserialization, specific network topologies, automatic state transfer/interpolation, etc. are out of scope for the library.
