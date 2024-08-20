@@ -134,7 +134,7 @@ impl IncomingResponse {
 ///         println!("New client connecting from {:?}", incoming.remote_address());
 ///         responses.send(IncomingResponse::accept(entity));
 ///     } else {
-///         respones.send(IncomingResponse::retry(entity));
+///         responses.send(IncomingResponse::retry(entity));
 ///     }
 /// }
 /// ```

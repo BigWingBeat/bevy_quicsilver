@@ -114,7 +114,7 @@ impl ConnectingItem<'_> {
     /// Returns `None` until the [`HandshakeDataReady`] observer trigger is fired for this entity.
     /// The dynamic type returned is determined by the configured [`Session`].
     /// For the default `rustls` session, it can be [`downcast`](Box::downcast) to a
-    /// [`crypto::rustls::HandshakeData`](crate::crypto::rustls::HandshakeData).
+    /// [`crypto::rustls::HandshakeData`](quinn_proto::crypto::rustls::HandshakeData).
     pub fn handshake_data(&self) -> Option<Box<dyn Any>> {
         self.connection.handshake_data()
     }
@@ -933,5 +933,69 @@ pub(crate) fn poll_connections(
         if transmit_blocked {
             connection.should_poll = true;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy_ecs::{
+        entity::Entity,
+        observer::Trigger,
+        query::With,
+        system::{Query, ResMut, Resource},
+    };
+    use quinn_proto::crypto::rustls::HandshakeData;
+
+    use crate::{tests::*, Endpoint, Incoming, IncomingResponse};
+
+    use super::{Connecting, HandshakeDataReady};
+
+    #[test]
+    fn handshake_data_ready() {
+        #[derive(Resource, Default)]
+        struct HasObserverTriggered(bool);
+
+        let mut app = app_no_errors();
+        app.init_resource::<HasObserverTriggered>();
+
+        let endpoint = endpoint();
+        app.world_mut().spawn(endpoint);
+
+        let mut endpoint = app
+            .world_mut()
+            .query::<Endpoint>()
+            .single_mut(app.world_mut());
+
+        let addr = endpoint.local_addr().unwrap();
+
+        let connecting = endpoint.connect(addr, "localhost").unwrap();
+        app.world_mut().spawn(connecting);
+
+        app.update();
+        app.update();
+
+        let incoming = app
+            .world_mut()
+            .query_filtered::<Entity, With<Incoming>>()
+            .single_mut(app.world_mut());
+
+        app.world_mut()
+            .send_event(IncomingResponse::accept(incoming));
+
+        app.observe(
+            |trigger: Trigger<HandshakeDataReady>,
+             mut connecting: Query<Connecting>,
+             mut res: ResMut<HasObserverTriggered>| {
+                let connecting = connecting.get_mut(trigger.entity()).unwrap();
+                let data = connecting.handshake_data().unwrap();
+                let data = data.downcast::<HandshakeData>().unwrap();
+                assert_eq!(data.server_name, Some("localhost".into()));
+                res.0 = true;
+            },
+        );
+
+        app.update();
+
+        assert!(app.world().resource::<HasObserverTriggered>().0);
     }
 }

@@ -587,7 +587,7 @@ fn udp_transmit<'a>(transmit: &quinn_proto::Transmit, buffer: &'a [u8]) -> quinn
 
 #[cfg(test)]
 mod tests {
-    use std::{error::Error, net::Ipv6Addr, sync::Arc};
+    use std::net::Ipv6Addr;
 
     use bevy_app::App;
     use bevy_ecs::{
@@ -597,20 +597,15 @@ mod tests {
         query::Without,
         system::{ResMut, Resource},
     };
-    use quinn_proto::{ClientConfig, EndpointConfig, ServerConfig};
-    use rcgen::CertifiedKey;
-    use rustls::{pki_types::PrivateKeyDer, RootCertStore};
 
     use crate::{
-        connection::{
-            Connecting, ConnectingError, Connection, ConnectionError, ConnectionEstablished,
-        },
-        incoming::{IncomingError, NewIncoming},
-        plugin::QuicPlugin,
+        connection::{Connecting, Connection, ConnectionEstablished},
+        incoming::NewIncoming,
+        tests::*,
         Incoming, IncomingResponse,
     };
 
-    use super::{Endpoint, EndpointBundle, EndpointError};
+    use super::{Endpoint, EndpointBundle};
 
     #[derive(Debug, Resource, Default)]
     struct ConnectionEstablishedEntities(Vec<Entity>);
@@ -618,45 +613,10 @@ mod tests {
     #[derive(Debug, Resource, Default)]
     struct NewIncomingEntities(Vec<Entity>);
 
-    fn panic_on_error<T: Error>(trigger: Trigger<T>) {
-        panic!(
-            "Entity {} encountered an error: {}",
-            trigger.entity(),
-            trigger.event()
-        );
-    }
-
-    fn generate_self_signed() -> CertifiedKey {
-        rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap()
-    }
-
-    fn client_endpoint(key: &CertifiedKey) -> EndpointBundle {
-        let mut roots = RootCertStore::empty();
-        roots.add(key.cert.der().clone()).unwrap();
-        EndpointBundle::new_client(
-            (Ipv6Addr::LOCALHOST, 0).into(),
-            Some(ClientConfig::with_root_certificates(Arc::new(roots)).unwrap()),
-        )
-        .unwrap()
-    }
-
-    fn server_endpoint(key: &CertifiedKey) -> EndpointBundle {
-        EndpointBundle::new_server(
-            (Ipv6Addr::LOCALHOST, 0).into(),
-            ServerConfig::with_single_cert(
-                vec![key.cert.der().clone()],
-                PrivateKeyDer::Pkcs8(key.key_pair.serialize_der().into()),
-            )
-            .unwrap(),
-        )
-        .unwrap()
-    }
-
     fn setup_app() -> App {
-        let mut app = App::new();
-        app.add_plugins(QuicPlugin)
+        let mut app = app_no_errors();
+        app.init_resource::<NewIncomingEntities>()
             .init_resource::<ConnectionEstablishedEntities>()
-            .init_resource::<NewIncomingEntities>()
             .observe(
                 |trigger: Trigger<NewIncoming>, mut entities: ResMut<NewIncomingEntities>| {
                     entities.0.push(trigger.entity());
@@ -667,11 +627,7 @@ mod tests {
                  mut entities: ResMut<ConnectionEstablishedEntities>| {
                     entities.0.push(trigger.entity())
                 },
-            )
-            .observe(panic_on_error::<EndpointError>)
-            .observe(panic_on_error::<ConnectingError>)
-            .observe(panic_on_error::<IncomingError>)
-            .observe(panic_on_error::<ConnectionError>);
+            );
         app
     }
 
@@ -813,29 +769,7 @@ mod tests {
     #[test]
     fn one_endpoint() {
         let mut app = setup_app();
-
-        let socket = std::net::UdpSocket::bind((Ipv6Addr::LOCALHOST, 0)).unwrap();
-
-        // Generate certificate for server to advertise and client to trust
-        let key = generate_self_signed();
-        let mut roots = RootCertStore::empty();
-        roots.add(key.cert.der().clone()).unwrap();
-
-        let endpoint = EndpointBundle::new(
-            socket,
-            EndpointConfig::default(),
-            Some(ClientConfig::with_root_certificates(Arc::new(roots)).unwrap()),
-            Some(
-                ServerConfig::with_single_cert(
-                    vec![key.cert.der().clone()],
-                    PrivateKeyDer::Pkcs8(key.key_pair.serialize_der().into()),
-                )
-                .unwrap(),
-            ),
-            None,
-        )
-        .unwrap();
-
+        let endpoint = endpoint();
         let endpoint_entity = app.world_mut().spawn(endpoint).id();
 
         let (client_connection, server_connection) =
@@ -857,11 +791,14 @@ mod tests {
     fn two_endpoints_same_world() {
         let mut app = setup_app();
 
-        // Generate certificate for server to advertise and client to trust
-        let key = generate_self_signed();
+        let addr = (Ipv6Addr::LOCALHOST, 0).into();
 
-        let client_endpoint = app.world_mut().spawn(client_endpoint(&key)).id();
-        let server_endpoint = app.world_mut().spawn(server_endpoint(&key)).id();
+        let (client, server) = generate_crypto();
+        let client = EndpointBundle::new_client(addr, Some(client)).unwrap();
+        let server = EndpointBundle::new_server(addr, server).unwrap();
+
+        let client_endpoint = app.world_mut().spawn(client).id();
+        let server_endpoint = app.world_mut().spawn(server).id();
 
         let (client_connection, server_connection) =
             establish_connection!(app, app, client_endpoint, server_endpoint);
@@ -883,11 +820,14 @@ mod tests {
         let mut client_app = setup_app();
         let mut server_app = setup_app();
 
-        // Generate certificate for server to advertise and client to trust
-        let key = generate_self_signed();
+        let addr = (Ipv6Addr::LOCALHOST, 0).into();
 
-        let client_endpoint = client_app.world_mut().spawn(client_endpoint(&key)).id();
-        let server_endpoint = server_app.world_mut().spawn(server_endpoint(&key)).id();
+        let (client, server) = generate_crypto();
+        let client = EndpointBundle::new_client(addr, Some(client)).unwrap();
+        let server = EndpointBundle::new_server(addr, server).unwrap();
+
+        let client_endpoint = client_app.world_mut().spawn(client).id();
+        let server_endpoint = server_app.world_mut().spawn(server).id();
 
         let (client_connection, server_connection) =
             establish_connection!(client_app, server_app, client_endpoint, server_endpoint);
