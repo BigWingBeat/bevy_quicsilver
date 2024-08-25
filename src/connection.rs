@@ -939,45 +939,85 @@ pub(crate) fn poll_connections(
 #[cfg(test)]
 mod tests {
     use bevy_ecs::{
-        entity::Entity,
         observer::Trigger,
-        query::With,
         system::{Query, ResMut, Resource},
     };
+    use bytes::Bytes;
     use quinn_proto::crypto::rustls::HandshakeData;
 
-    use crate::{tests::*, Endpoint, Incoming, IncomingResponse};
+    use crate::{endpoint::EndpointError, incoming::IncomingError, tests::*, IncomingResponse};
 
-    use super::{Connecting, HandshakeDataReady};
+    use super::{Connecting, ConnectingError, Connection, ConnectionError, HandshakeDataReady};
+
+    #[derive(Resource, Default)]
+    struct HasObserverTriggered(bool);
+
+    #[test]
+    fn connection_error() {
+        let mut app = app();
+        app.init_resource::<HasObserverTriggered>()
+            .observe(panic_on_trigger::<EndpointError>)
+            .observe(panic_on_trigger::<ConnectingError>)
+            .observe(panic_on_trigger::<IncomingError>);
+
+        let connections = connection(&mut app);
+
+        let mut server = app
+            .world_mut()
+            .query::<Connection>()
+            .get_mut(app.world_mut(), connections.server)
+            .unwrap();
+
+        server.close(0u8.into(), Bytes::new());
+
+        app.observe(
+            move |trigger: Trigger<ConnectionError>,
+                  connection: Query<Connection>,
+                  mut res: ResMut<HasObserverTriggered>| {
+                assert_eq!(trigger.entity(), connections.client);
+                let _ = connection.get(trigger.entity()).unwrap();
+                res.0 = true;
+            },
+        );
+
+        app.update();
+        app.update();
+        assert!(app.world().resource::<HasObserverTriggered>().0);
+    }
+
+    #[test]
+    fn connecting_error() {
+        let mut app = app();
+        app.init_resource::<HasObserverTriggered>()
+            .observe(panic_on_trigger::<EndpointError>)
+            .observe(panic_on_trigger::<IncomingError>)
+            .observe(panic_on_trigger::<ConnectionError>);
+
+        let incoming = incoming(&mut app).server;
+
+        app.world_mut()
+            .send_event(IncomingResponse::refuse(incoming));
+
+        app.observe(
+            |trigger: Trigger<ConnectingError>,
+             connecting: Query<Connecting>,
+             mut res: ResMut<HasObserverTriggered>| {
+                let _ = connecting.get(trigger.entity()).unwrap();
+                res.0 = true;
+            },
+        );
+
+        app.update();
+        app.update();
+        assert!(app.world().resource::<HasObserverTriggered>().0);
+    }
 
     #[test]
     fn handshake_data_ready() {
-        #[derive(Resource, Default)]
-        struct HasObserverTriggered(bool);
-
         let mut app = app_no_errors();
         app.init_resource::<HasObserverTriggered>();
 
-        let endpoint = endpoint();
-        app.world_mut().spawn(endpoint);
-
-        let mut endpoint = app
-            .world_mut()
-            .query::<Endpoint>()
-            .single_mut(app.world_mut());
-
-        let addr = endpoint.local_addr().unwrap();
-
-        let connecting = endpoint.connect(addr, "localhost").unwrap();
-        app.world_mut().spawn(connecting);
-
-        app.update();
-        app.update();
-
-        let incoming = app
-            .world_mut()
-            .query_filtered::<Entity, With<Incoming>>()
-            .single_mut(app.world_mut());
+        let incoming = incoming(&mut app).server;
 
         app.world_mut()
             .send_event(IncomingResponse::accept(incoming));
@@ -995,7 +1035,6 @@ mod tests {
         );
 
         app.update();
-
         assert!(app.world().resource::<HasObserverTriggered>().0);
     }
 }

@@ -29,7 +29,7 @@ mod tests {
     use std::{error::Error, net::Ipv6Addr, sync::Arc};
 
     use bevy_app::App;
-    use bevy_ecs::observer::Trigger;
+    use bevy_ecs::{entity::Entity, observer::Trigger, query::With};
     use quinn_proto::{ClientConfig, ServerConfig};
     use rustls::{pki_types::PrivateKeyDer, RootCertStore};
 
@@ -37,8 +37,14 @@ mod tests {
         connection::{ConnectingError, ConnectionError},
         endpoint::{EndpointBundle, EndpointError},
         incoming::IncomingError,
-        QuicPlugin,
+        Endpoint, Incoming, IncomingResponse, QuicPlugin,
     };
+
+    #[derive(Debug)]
+    pub(crate) struct ConnectionEntities {
+        pub(crate) client: Entity,
+        pub(crate) server: Entity,
+    }
 
     pub(crate) fn panic_on_trigger<T: Error>(trigger: Trigger<T>) {
         panic!(
@@ -46,6 +52,21 @@ mod tests {
             trigger.entity(),
             trigger.event()
         );
+    }
+
+    pub(crate) fn app() -> App {
+        let mut app = App::new();
+        app.add_plugins(QuicPlugin);
+        app
+    }
+
+    pub(crate) fn app_no_errors() -> App {
+        let mut app = app();
+        app.observe(panic_on_trigger::<EndpointError>)
+            .observe(panic_on_trigger::<ConnectingError>)
+            .observe(panic_on_trigger::<IncomingError>)
+            .observe(panic_on_trigger::<ConnectionError>);
+        app
     }
 
     pub(crate) fn generate_crypto() -> (ClientConfig, ServerConfig) {
@@ -68,13 +89,41 @@ mod tests {
         EndpointBundle::new_client_host((Ipv6Addr::LOCALHOST, 0).into(), client, server).unwrap()
     }
 
-    pub(crate) fn app_no_errors() -> App {
-        let mut app = App::new();
-        app.add_plugins(QuicPlugin)
-            .observe(panic_on_trigger::<EndpointError>)
-            .observe(panic_on_trigger::<ConnectingError>)
-            .observe(panic_on_trigger::<IncomingError>)
-            .observe(panic_on_trigger::<ConnectionError>);
-        app
+    pub(crate) fn incoming(app: &mut App) -> ConnectionEntities {
+        let endpoint = endpoint();
+        app.world_mut().spawn(endpoint);
+
+        let mut endpoint = app
+            .world_mut()
+            .query::<Endpoint>()
+            .single_mut(app.world_mut());
+
+        let addr = endpoint.local_addr().unwrap();
+
+        let connecting = endpoint.connect(addr, "localhost").unwrap();
+        let client = app.world_mut().spawn(connecting).id();
+
+        app.update();
+        app.update();
+
+        let server = app
+            .world_mut()
+            .query_filtered::<Entity, With<Incoming>>()
+            .single_mut(app.world_mut());
+
+        ConnectionEntities { client, server }
+    }
+
+    pub(crate) fn connection(app: &mut App) -> ConnectionEntities {
+        let entities = incoming(app);
+
+        app.world_mut()
+            .send_event(IncomingResponse::accept(entities.server));
+
+        app.update();
+        app.update();
+        app.update();
+
+        entities
     }
 }
