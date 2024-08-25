@@ -29,7 +29,12 @@ mod tests {
     use std::{error::Error, net::Ipv6Addr, sync::Arc};
 
     use bevy_app::App;
-    use bevy_ecs::{entity::Entity, observer::Trigger, query::With};
+    use bevy_ecs::{
+        entity::Entity,
+        observer::Trigger,
+        query::{QueryData, With},
+        system::{Query, ResMut, Resource},
+    };
     use quinn_proto::{ClientConfig, ServerConfig};
     use rustls::{pki_types::PrivateKeyDer, RootCertStore};
 
@@ -46,12 +51,33 @@ mod tests {
         pub(crate) server: Entity,
     }
 
+    #[derive(Resource, Default)]
+    pub(crate) struct HasObserverTriggered(pub(crate) bool);
+
+    impl Drop for HasObserverTriggered {
+        fn drop(&mut self) {
+            if !self.0 {
+                panic!("Observer was not triggered")
+            }
+        }
+    }
+
     pub(crate) fn panic_on_trigger<T: Error>(trigger: Trigger<T>) {
         panic!(
             "Entity {} encountered an error: {}",
             trigger.entity(),
             trigger.event()
         );
+    }
+
+    pub(crate) fn test_observer<T, C: QueryData>(
+        entity: Entity,
+    ) -> impl Fn(Trigger<T>, Query<C>, ResMut<HasObserverTriggered>) {
+        move |trigger: Trigger<T>, query: Query<C>, mut res: ResMut<HasObserverTriggered>| {
+            assert_eq!(trigger.entity(), entity);
+            let _ = query.get(trigger.entity()).unwrap();
+            res.0 = true;
+        }
     }
 
     pub(crate) fn app() -> App {

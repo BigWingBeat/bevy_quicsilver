@@ -940,17 +940,17 @@ pub(crate) fn poll_connections(
 mod tests {
     use bevy_ecs::{
         observer::Trigger,
-        system::{Query, ResMut, Resource},
+        system::{Query, ResMut},
     };
     use bytes::Bytes;
     use quinn_proto::crypto::rustls::HandshakeData;
 
     use crate::{endpoint::EndpointError, incoming::IncomingError, tests::*, IncomingResponse};
 
-    use super::{Connecting, ConnectingError, Connection, ConnectionError, HandshakeDataReady};
-
-    #[derive(Resource, Default)]
-    struct HasObserverTriggered(bool);
+    use super::{
+        Connecting, ConnectingError, Connection, ConnectionAccepted, ConnectionError,
+        ConnectionEstablished, HandshakeDataReady,
+    };
 
     #[test]
     fn connection_error() {
@@ -970,19 +970,12 @@ mod tests {
 
         server.close(0u8.into(), Bytes::new());
 
-        app.observe(
-            move |trigger: Trigger<ConnectionError>,
-                  connection: Query<Connection>,
-                  mut res: ResMut<HasObserverTriggered>| {
-                assert_eq!(trigger.entity(), connections.client);
-                let _ = connection.get(trigger.entity()).unwrap();
-                res.0 = true;
-            },
-        );
+        app.observe(test_observer::<ConnectionError, Connection>(
+            connections.client,
+        ));
 
         app.update();
         app.update();
-        assert!(app.world().resource::<HasObserverTriggered>().0);
     }
 
     #[test]
@@ -993,23 +986,50 @@ mod tests {
             .observe(panic_on_trigger::<IncomingError>)
             .observe(panic_on_trigger::<ConnectionError>);
 
+        let connections = incoming(&mut app);
+
+        app.world_mut()
+            .send_event(IncomingResponse::refuse(connections.server));
+
+        app.observe(test_observer::<ConnectingError, Connecting>(
+            connections.client,
+        ));
+
+        app.update();
+        app.update();
+    }
+
+    #[test]
+    fn connection_accepted() {
+        let mut app = app_no_errors();
+        app.init_resource::<HasObserverTriggered>();
+
         let incoming = incoming(&mut app).server;
 
         app.world_mut()
-            .send_event(IncomingResponse::refuse(incoming));
+            .send_event(IncomingResponse::accept(incoming));
 
-        app.observe(
-            |trigger: Trigger<ConnectingError>,
-             connecting: Query<Connecting>,
-             mut res: ResMut<HasObserverTriggered>| {
-                let _ = connecting.get(trigger.entity()).unwrap();
-                res.0 = true;
-            },
-        );
+        app.observe(test_observer::<ConnectionAccepted, Connecting>(incoming));
+
+        app.update();
+    }
+
+    #[test]
+    fn connection_established() {
+        let mut app = app_no_errors();
+        app.init_resource::<HasObserverTriggered>();
+
+        let incoming = incoming(&mut app).server;
+
+        app.world_mut()
+            .send_event(IncomingResponse::accept(incoming));
 
         app.update();
         app.update();
-        assert!(app.world().resource::<HasObserverTriggered>().0);
+
+        app.observe(test_observer::<ConnectionEstablished, Connection>(incoming));
+
+        app.update();
     }
 
     #[test]
@@ -1023,9 +1043,10 @@ mod tests {
             .send_event(IncomingResponse::accept(incoming));
 
         app.observe(
-            |trigger: Trigger<HandshakeDataReady>,
-             mut connecting: Query<Connecting>,
-             mut res: ResMut<HasObserverTriggered>| {
+            move |trigger: Trigger<HandshakeDataReady>,
+                  mut connecting: Query<Connecting>,
+                  mut res: ResMut<HasObserverTriggered>| {
+                assert_eq!(trigger.entity(), incoming);
                 let connecting = connecting.get_mut(trigger.entity()).unwrap();
                 let data = connecting.handshake_data().unwrap();
                 let data = data.downcast::<HandshakeData>().unwrap();
@@ -1035,6 +1056,5 @@ mod tests {
         );
 
         app.update();
-        assert!(app.world().resource::<HasObserverTriggered>().0);
     }
 }
