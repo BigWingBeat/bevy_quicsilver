@@ -1,7 +1,7 @@
 #![doc(test(attr(deny(warnings))))]
 #![doc = include_str!("../README.md")]
 
-use bevy_ecs::component::Component;
+use bevy_ecs::{bundle::Bundle, component::Component, system::EntityCommands};
 
 pub use quinn_proto::{ClientConfig, ServerConfig};
 
@@ -22,6 +22,20 @@ pub mod streams;
 /// is on the entity, instead only the connection components will be removed from the entity, and it will not be despawned
 #[derive(Debug, Component)]
 pub struct KeepAlive;
+
+trait KeepAliveEntityCommandsExt {
+    fn remove_or_despawn<B: Bundle>(&mut self, keepalive: bool);
+}
+
+impl KeepAliveEntityCommandsExt for EntityCommands<'_> {
+    fn remove_or_despawn<B: Bundle>(&mut self, keepalive: bool) {
+        if keepalive {
+            self.remove::<B>();
+        } else {
+            self.despawn();
+        }
+    }
+}
 
 /// Helper functions for tests located in specific modules
 #[cfg(test)]

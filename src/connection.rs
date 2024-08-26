@@ -18,7 +18,7 @@ use thiserror::Error;
 use crate::{
     endpoint::{Endpoint, EndpointImpl},
     streams::{RecvStream, SendStream},
-    KeepAlive,
+    KeepAlive, KeepAliveEntityCommandsExt,
 };
 
 use std::{
@@ -795,13 +795,11 @@ pub(crate) fn poll_connections(
             Err(QueryEntityError::QueryDoesNotMatch(_))
             | Err(QueryEntityError::NoSuchEntity(_)) => {
                 // If the endpoint does not exist anymore, neither should we
-                if keepalive {
-                    commands
-                        .entity(entity)
-                        .remove::<(ConnectionImpl, StillConnecting, FullyConnected)>();
-                } else {
-                    commands.entity(entity).despawn();
-                }
+                commands
+                    .entity(entity)
+                    .remove_or_despawn::<(ConnectionImpl, StillConnecting, FullyConnected)>(
+                        keepalive,
+                    );
                 continue;
             }
             Err(QueryEntityError::AliasedMutability(_)) => unreachable!(),
@@ -814,13 +812,10 @@ pub(crate) fn poll_connections(
                 .connections
                 .contains_key(&connection.handle)
         {
-            if keepalive {
-                commands
-                    .entity(entity)
-                    .remove::<(ConnectionImpl, StillConnecting, FullyConnected)>();
-            } else {
-                commands.entity(entity).despawn();
-            }
+            commands
+                .entity(entity)
+                .remove_or_despawn::<(ConnectionImpl, StillConnecting, FullyConnected)>(keepalive);
+            continue;
         }
 
         connection.handle_timeout(now, time.delta());

@@ -19,7 +19,7 @@ use crate::{
     connection::{ConnectingBundle, ConnectionImpl},
     incoming::Incoming,
     socket::UdpSocket,
-    KeepAlive,
+    KeepAlive, KeepAliveEntityCommandsExt,
 };
 
 /// An observer trigger that is fired when an endpoint encounters an error
@@ -543,11 +543,9 @@ pub(crate) fn poll_endpoints(
             }
         }) {
             commands.trigger_targets(EndpointError::IoError(error), endpoint_entity);
-            if keepalive {
-                commands.entity(endpoint_entity).remove::<EndpointImpl>();
-            } else {
-                commands.entity(endpoint_entity).despawn();
-            }
+            commands
+                .entity(endpoint_entity)
+                .remove_or_despawn::<EndpointImpl>(keepalive);
         }
 
         for (transmit, buffer) in transmits {
