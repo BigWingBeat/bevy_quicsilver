@@ -513,19 +513,15 @@ impl Component for ConnectionImpl {
     const STORAGE_TYPE: StorageType = StorageType::Table;
 
     fn register_component_hooks(hooks: &mut ComponentHooks) {
-        hooks
-            .on_insert(|mut world, entity, _component_id| {
-                // Bookkeeping so the endpoint knows the entity we're on
-                let connection = world.get::<Self>(entity).unwrap();
-                let handle = connection.handle;
-                let Some(mut endpoint) = world.get_mut::<EndpointImpl>(connection.endpoint) else {
-                    return;
-                };
-                endpoint.connections.insert(handle, entity);
-            })
-            .on_remove(|mut world, entity, _component_id| {
-                world.trigger_targets(ConnectionDrained, entity);
-            });
+        hooks.on_insert(|mut world, entity, _component_id| {
+            // Bookkeeping so the endpoint knows the entity we're on
+            let connection = world.get::<Self>(entity).unwrap();
+            let handle = connection.handle;
+            let Some(mut endpoint) = world.get_mut::<EndpointImpl>(connection.endpoint) else {
+                return;
+            };
+            endpoint.connections.insert(handle, entity);
+        });
     }
 }
 
@@ -790,33 +786,34 @@ pub(crate) fn poll_connections(
 ) {
     let now = Instant::now();
     for (entity, mut connection, established, keepalive) in query.iter_mut() {
-        let mut endpoint = match endpoint.get_mut(connection.endpoint) {
-            Ok(endpoint) => endpoint,
-            Err(QueryEntityError::QueryDoesNotMatch(_))
-            | Err(QueryEntityError::NoSuchEntity(_)) => {
-                // If the endpoint does not exist anymore, neither should we
-                commands
-                    .entity(entity)
-                    .remove_or_despawn::<(ConnectionImpl, StillConnecting, FullyConnected)>(
-                        keepalive,
-                    );
-                continue;
+        let Some(mut endpoint) = ({
+            if connection.is_drained() {
+                commands.trigger_targets(ConnectionDrained, entity);
+                None
+            } else {
+                match endpoint.get_mut(connection.endpoint) {
+                    Ok(endpoint) => {
+                        // Returns None if the endpoint was replaced with a new one
+                        endpoint
+                            .endpoint
+                            .connections
+                            .contains_key(&connection.handle)
+                            .then_some(endpoint)
+                    }
+                    Err(QueryEntityError::QueryDoesNotMatch(_))
+                    | Err(QueryEntityError::NoSuchEntity(_)) => {
+                        // If the endpoint does not exist anymore, neither should we
+                        None
+                    }
+                    Err(QueryEntityError::AliasedMutability(_)) => unreachable!(),
+                }
             }
-            Err(QueryEntityError::AliasedMutability(_)) => unreachable!(),
-        };
-
-        // If drained or the endpoint was replaced with a new one
-        if connection.is_drained()
-            || !endpoint
-                .endpoint
-                .connections
-                .contains_key(&connection.handle)
-        {
+        }) else {
             commands
                 .entity(entity)
                 .remove_or_despawn::<(ConnectionImpl, StillConnecting, FullyConnected)>(keepalive);
             continue;
-        }
+        };
 
         connection.handle_timeout(now, time.delta());
 
