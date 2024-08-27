@@ -942,12 +942,43 @@ mod tests {
     use bytes::Bytes;
     use quinn_proto::crypto::rustls::HandshakeData;
 
-    use crate::{endpoint::EndpointError, incoming::IncomingError, tests::*, IncomingResponse};
+    use crate::{
+        endpoint::EndpointError, incoming::IncomingError, tests::*, IncomingResponse, KeepAlive,
+    };
 
     use super::{
         Connecting, ConnectingError, Connection, ConnectionAccepted, ConnectionDrained,
-        ConnectionError, ConnectionEstablished, HandshakeDataReady,
+        ConnectionError, ConnectionEstablished, ConnectionImpl, HandshakeDataReady,
     };
+
+    #[test]
+    fn keepalive() {
+        // Exclude ConnectionError because it fires when connection closes
+        let mut app = app();
+        app.observe(panic_on_trigger::<EndpointError>)
+            .observe(panic_on_trigger::<ConnectingError>)
+            .observe(panic_on_trigger::<IncomingError>);
+
+        let server = connection(&mut app).server;
+
+        app.world_mut().entity_mut(server).insert(KeepAlive);
+
+        let mut connection = app
+            .world_mut()
+            .query::<Connection>()
+            .get_mut(app.world_mut(), server)
+            .unwrap();
+
+        connection.close(0u8.into(), Bytes::new());
+
+        // Wait for drain timeout to elapse
+        thread::sleep(Duration::from_millis(80));
+
+        app.update();
+        app.update();
+
+        assert!(!app.world().entity(server).contains::<ConnectionImpl>());
+    }
 
     #[test]
     fn connection_error() {
@@ -1001,13 +1032,12 @@ mod tests {
         let mut app = app_no_errors();
         app.init_resource::<HasObserverTriggered>();
 
-        let incoming = incoming(&mut app).server;
+        let server = incoming(&mut app).server;
+
+        app.world_mut().send_event(IncomingResponse::accept(server));
 
         app.world_mut()
-            .send_event(IncomingResponse::accept(incoming));
-
-        app.world_mut()
-            .entity_mut(incoming)
+            .entity_mut(server)
             .observe(test_observer::<ConnectionAccepted, Connecting>());
 
         app.update();
@@ -1018,16 +1048,15 @@ mod tests {
         let mut app = app_no_errors();
         app.init_resource::<HasObserverTriggered>();
 
-        let incoming = incoming(&mut app).server;
+        let server = incoming(&mut app).server;
 
-        app.world_mut()
-            .send_event(IncomingResponse::accept(incoming));
+        app.world_mut().send_event(IncomingResponse::accept(server));
 
         app.update();
         app.update();
 
         app.world_mut()
-            .entity_mut(incoming)
+            .entity_mut(server)
             .observe(test_observer::<ConnectionEstablished, Connection>());
 
         app.update();
@@ -1035,24 +1064,25 @@ mod tests {
 
     #[test]
     fn connection_drained() {
+        // Exclude ConnectionError because it fires when connection closes
         let mut app = app();
         app.init_resource::<HasObserverTriggered>()
             .observe(panic_on_trigger::<EndpointError>)
             .observe(panic_on_trigger::<ConnectingError>)
             .observe(panic_on_trigger::<IncomingError>);
 
-        let connections = connection(&mut app);
+        let server = connection(&mut app).server;
 
-        let mut server = app
+        let mut connection = app
             .world_mut()
             .query::<Connection>()
-            .get_mut(app.world_mut(), connections.server)
+            .get_mut(app.world_mut(), server)
             .unwrap();
 
-        server.close(0u8.into(), Bytes::new());
+        connection.close(0u8.into(), Bytes::new());
 
         app.world_mut()
-            .entity_mut(connections.server)
+            .entity_mut(server)
             .observe(test_observer::<ConnectionDrained, Connection>());
 
         // Wait for drain timeout to elapse
@@ -1061,7 +1091,7 @@ mod tests {
         app.update();
         app.update();
 
-        assert!(app.world_mut().get_entity(connections.server).is_none());
+        assert!(app.world_mut().get_entity(server).is_none());
     }
 
     #[test]
@@ -1069,12 +1099,11 @@ mod tests {
         let mut app = app_no_errors();
         app.init_resource::<HasObserverTriggered>();
 
-        let incoming = incoming(&mut app).server;
+        let server = incoming(&mut app).server;
 
-        app.world_mut()
-            .send_event(IncomingResponse::accept(incoming));
+        app.world_mut().send_event(IncomingResponse::accept(server));
 
-        app.world_mut().entity_mut(incoming).observe(
+        app.world_mut().entity_mut(server).observe(
             |trigger: Trigger<HandshakeDataReady>,
              mut connecting: Query<Connecting>,
              mut res: ResMut<HasObserverTriggered>| {
