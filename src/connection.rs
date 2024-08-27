@@ -703,6 +703,7 @@ impl ConnectionImpl {
                 Err(SendDatagramError::Blocked(_))
             )
         });
+        self.should_poll = true;
     }
 
     pub(crate) fn handle_event(&mut self, event: quinn_proto::ConnectionEvent) {
@@ -793,7 +794,7 @@ pub(crate) fn poll_connections(
             } else {
                 match endpoint.get_mut(connection.endpoint) {
                     Ok(endpoint) => {
-                        // Returns None if the endpoint was replaced with a new one
+                        // Return None if the endpoint was replaced with a new one
                         endpoint
                             .endpoint
                             .connections
@@ -822,6 +823,8 @@ pub(crate) fn poll_connections(
 
         let mut transmit_blocked = false;
 
+        // Poll in a loop to eagerly do as much work as we can,
+        // instead of polling once per system run, which would mean polling only once per app update
         while connection.should_poll {
             connection.should_poll = false;
 
