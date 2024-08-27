@@ -85,10 +85,8 @@ mod tests {
     }
 
     pub(crate) fn test_observer<T, C: QueryData>(
-        entity: Entity,
     ) -> impl Fn(Trigger<T>, Query<C>, ResMut<HasObserverTriggered>) {
         move |trigger: Trigger<T>, query: Query<C>, mut res: ResMut<HasObserverTriggered>| {
-            assert_eq!(trigger.entity(), entity);
             let _ = query.get(trigger.entity()).unwrap();
             res.0 = true;
         }

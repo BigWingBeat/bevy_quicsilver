@@ -930,6 +930,8 @@ pub(crate) fn poll_connections(
 
 #[cfg(test)]
 mod tests {
+    use std::{thread, time::Duration};
+
     use bevy_ecs::{
         observer::Trigger,
         system::{Query, ResMut},
@@ -940,8 +942,8 @@ mod tests {
     use crate::{endpoint::EndpointError, incoming::IncomingError, tests::*, IncomingResponse};
 
     use super::{
-        Connecting, ConnectingError, Connection, ConnectionAccepted, ConnectionError,
-        ConnectionEstablished, HandshakeDataReady,
+        Connecting, ConnectingError, Connection, ConnectionAccepted, ConnectionDrained,
+        ConnectionError, ConnectionEstablished, HandshakeDataReady,
     };
 
     #[test]
@@ -962,9 +964,9 @@ mod tests {
 
         server.close(0u8.into(), Bytes::new());
 
-        app.observe(test_observer::<ConnectionError, Connection>(
-            connections.client,
-        ));
+        app.world_mut()
+            .entity_mut(connections.client)
+            .observe(test_observer::<ConnectionError, Connection>());
 
         app.update();
         app.update();
@@ -983,9 +985,9 @@ mod tests {
         app.world_mut()
             .send_event(IncomingResponse::refuse(connections.server));
 
-        app.observe(test_observer::<ConnectingError, Connecting>(
-            connections.client,
-        ));
+        app.world_mut()
+            .entity_mut(connections.client)
+            .observe(test_observer::<ConnectingError, Connecting>());
 
         app.update();
         app.update();
@@ -1001,7 +1003,9 @@ mod tests {
         app.world_mut()
             .send_event(IncomingResponse::accept(incoming));
 
-        app.observe(test_observer::<ConnectionAccepted, Connecting>(incoming));
+        app.world_mut()
+            .entity_mut(incoming)
+            .observe(test_observer::<ConnectionAccepted, Connecting>());
 
         app.update();
     }
@@ -1019,8 +1023,39 @@ mod tests {
         app.update();
         app.update();
 
-        app.observe(test_observer::<ConnectionEstablished, Connection>(incoming));
+        app.world_mut()
+            .entity_mut(incoming)
+            .observe(test_observer::<ConnectionEstablished, Connection>());
 
+        app.update();
+    }
+
+    #[test]
+    fn connection_drained() {
+        let mut app = app();
+        app.init_resource::<HasObserverTriggered>()
+            .observe(panic_on_trigger::<EndpointError>)
+            .observe(panic_on_trigger::<ConnectingError>)
+            .observe(panic_on_trigger::<IncomingError>);
+
+        let connections = connection(&mut app);
+
+        let mut server = app
+            .world_mut()
+            .query::<Connection>()
+            .get_mut(app.world_mut(), connections.server)
+            .unwrap();
+
+        server.close(0u8.into(), Bytes::new());
+
+        app.world_mut()
+            .entity_mut(connections.server)
+            .observe(test_observer::<ConnectionDrained, Connection>());
+
+        // Wait for drain timeout to elapse
+        thread::sleep(Duration::from_millis(80));
+
+        app.update();
         app.update();
     }
 
@@ -1034,11 +1069,10 @@ mod tests {
         app.world_mut()
             .send_event(IncomingResponse::accept(incoming));
 
-        app.observe(
-            move |trigger: Trigger<HandshakeDataReady>,
-                  mut connecting: Query<Connecting>,
-                  mut res: ResMut<HasObserverTriggered>| {
-                assert_eq!(trigger.entity(), incoming);
+        app.world_mut().entity_mut(incoming).observe(
+            |trigger: Trigger<HandshakeDataReady>,
+             mut connecting: Query<Connecting>,
+             mut res: ResMut<HasObserverTriggered>| {
                 let connecting = connecting.get_mut(trigger.entity()).unwrap();
                 let data = connecting.handshake_data().unwrap();
                 let data = data.downcast::<HandshakeData>().unwrap();
