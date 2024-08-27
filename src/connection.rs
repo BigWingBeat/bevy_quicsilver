@@ -942,9 +942,7 @@ mod tests {
     use bytes::Bytes;
     use quinn_proto::crypto::rustls::HandshakeData;
 
-    use crate::{
-        endpoint::EndpointError, incoming::IncomingError, tests::*, IncomingResponse, KeepAlive,
-    };
+    use crate::{tests::*, IncomingResponse, KeepAlive};
 
     use super::{
         Connecting, ConnectingError, Connection, ConnectionAccepted, ConnectionDrained,
@@ -954,10 +952,7 @@ mod tests {
     #[test]
     fn keepalive() {
         // Exclude ConnectionError because it fires when connection closes
-        let mut app = app();
-        app.observe(panic_on_trigger::<EndpointError>)
-            .observe(panic_on_trigger::<ConnectingError>)
-            .observe(panic_on_trigger::<IncomingError>);
+        let mut app = app_one_error::<ConnectionError>();
 
         let server = connection(&mut app).server;
 
@@ -982,11 +977,8 @@ mod tests {
 
     #[test]
     fn connection_error() {
-        let mut app = app();
-        app.init_resource::<HasObserverTriggered>()
-            .observe(panic_on_trigger::<EndpointError>)
-            .observe(panic_on_trigger::<ConnectingError>)
-            .observe(panic_on_trigger::<IncomingError>);
+        let mut app = app_one_error::<ConnectionError>();
+        app.init_resource::<HasObserverTriggered>();
 
         let connections = connection(&mut app);
 
@@ -1008,11 +1000,8 @@ mod tests {
 
     #[test]
     fn connecting_error() {
-        let mut app = app();
-        app.init_resource::<HasObserverTriggered>()
-            .observe(panic_on_trigger::<EndpointError>)
-            .observe(panic_on_trigger::<IncomingError>)
-            .observe(panic_on_trigger::<ConnectionError>);
+        let mut app = app_one_error::<ConnectingError>();
+        app.init_resource::<HasObserverTriggered>();
 
         let connections = incoming(&mut app);
 
@@ -1065,11 +1054,8 @@ mod tests {
     #[test]
     fn connection_drained() {
         // Exclude ConnectionError because it fires when connection closes
-        let mut app = app();
-        app.init_resource::<HasObserverTriggered>()
-            .observe(panic_on_trigger::<EndpointError>)
-            .observe(panic_on_trigger::<ConnectingError>)
-            .observe(panic_on_trigger::<IncomingError>);
+        let mut app = app_one_error::<ConnectionError>();
+        app.init_resource::<HasObserverTriggered>();
 
         let server = connection(&mut app).server;
 

@@ -40,7 +40,7 @@ impl KeepAliveEntityCommandsExt for EntityCommands<'_> {
 /// Helper functions for tests located in specific modules
 #[cfg(test)]
 mod tests {
-    use std::{error::Error, net::Ipv6Addr, sync::Arc};
+    use std::{any::TypeId, error::Error, net::Ipv6Addr, sync::Arc};
 
     use bevy_app::App;
     use bevy_ecs::{
@@ -104,6 +104,27 @@ mod tests {
             .observe(panic_on_trigger::<ConnectingError>)
             .observe(panic_on_trigger::<IncomingError>)
             .observe(panic_on_trigger::<ConnectionError>);
+        app
+    }
+
+    pub(crate) fn app_one_error<T: 'static>() -> App {
+        let mut app = app();
+        let t = TypeId::of::<T>();
+        if t != TypeId::of::<EndpointError>() {
+            app.observe(panic_on_trigger::<EndpointError>);
+        }
+
+        if t != TypeId::of::<ConnectingError>() {
+            app.observe(panic_on_trigger::<ConnectingError>);
+        }
+
+        if t != TypeId::of::<IncomingError>() {
+            app.observe(panic_on_trigger::<IncomingError>);
+        }
+
+        if t != TypeId::of::<ConnectionError>() {
+            app.observe(panic_on_trigger::<ConnectionError>);
+        }
         app
     }
 
