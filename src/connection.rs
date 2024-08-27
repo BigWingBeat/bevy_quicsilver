@@ -1057,6 +1057,8 @@ mod tests {
 
         app.update();
         app.update();
+
+        assert!(app.world_mut().get_entity(connections.server).is_none());
     }
 
     #[test]
