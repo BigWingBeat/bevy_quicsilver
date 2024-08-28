@@ -715,6 +715,7 @@ impl ConnectionImpl {
         if let Some((ref mut timer, _)) = self.timeout_timer {
             if timer.tick(delta).just_finished() {
                 self.connection.handle_timeout(now);
+                self.timeout_timer = None;
                 self.should_poll = true;
             }
         }
@@ -933,16 +934,15 @@ pub(crate) fn poll_connections(
 
 #[cfg(test)]
 mod tests {
-    use std::{thread, time::Duration};
-
     use bevy_ecs::{
+        entity::Entity,
         observer::Trigger,
         system::{Query, ResMut},
     };
     use bytes::Bytes;
     use quinn_proto::crypto::rustls::HandshakeData;
 
-    use crate::{tests::*, IncomingResponse, KeepAlive};
+    use crate::{tests::*, Endpoint, IncomingResponse, KeepAlive};
 
     use super::{
         Connecting, ConnectingError, Connection, ConnectionAccepted, ConnectionDrained,
@@ -954,25 +954,31 @@ mod tests {
         // Exclude ConnectionError because it fires when connection closes
         let mut app = app_one_error::<ConnectionError>();
 
-        let server = connection(&mut app).server;
+        let connections = connection(&mut app);
 
-        app.world_mut().entity_mut(server).insert(KeepAlive);
+        app.world_mut()
+            .entity_mut(connections.server)
+            .insert(KeepAlive);
 
-        let mut connection = app
+        let endpoint = app
             .world_mut()
-            .query::<Connection>()
-            .get_mut(app.world_mut(), server)
-            .unwrap();
+            .query::<(Entity, Endpoint)>()
+            .single(app.world())
+            .0;
 
-        connection.close(0u8.into(), Bytes::new());
-
-        // Wait for drain timeout to elapse
-        thread::sleep(Duration::from_millis(80));
+        // When the endpoint despawns all its associated connections should too
+        app.world_mut().despawn(endpoint);
 
         app.update();
-        app.update();
 
-        assert!(!app.world().entity(server).contains::<ConnectionImpl>());
+        // Server with keepalive should still exist, but with component removed
+        assert!(!app
+            .world()
+            .entity(connections.server)
+            .contains::<ConnectionImpl>());
+
+        // Client without keepalive should be despawned
+        assert!(app.world_mut().get_entity(connections.client).is_none());
     }
 
     #[test]
@@ -1071,12 +1077,12 @@ mod tests {
             .entity_mut(server)
             .observe(test_observer::<ConnectionDrained, Connection>());
 
-        // Wait for drain timeout to elapse
-        thread::sleep(Duration::from_millis(80));
+        // Wait for the drain timeout to elapse
+        while !app.world().resource::<HasObserverTriggered>().0 {
+            app.update();
+        }
 
-        app.update();
-        app.update();
-
+        // Connections should despawn after draining
         assert!(app.world_mut().get_entity(server).is_none());
     }
 
