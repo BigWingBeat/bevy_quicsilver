@@ -223,7 +223,8 @@ impl EndpointItem<'_> {
     /// Incoming connections and connections to servers unreachable from the new address will be lost.
     ///
     /// On error, the old UDP socket is retained.
-    pub fn rebind(&mut self, new_socket: std::net::UdpSocket) -> std::io::Result<()> {
+    #[allow(dead_code)] // Make pub when implemented
+    fn rebind(&mut self, new_socket: std::net::UdpSocket) -> std::io::Result<()> {
         self.endpoint.rebind(new_socket)
     }
 
