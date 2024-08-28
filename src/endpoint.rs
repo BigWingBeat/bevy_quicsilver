@@ -619,12 +619,6 @@ mod tests {
 
         let connections = connection(&mut app);
 
-        let endpoint = app
-            .world_mut()
-            .query::<(Entity, Endpoint)>()
-            .single(app.world())
-            .0;
-
         app.world_mut()
             .entity_mut(connections.server)
             .remove::<ConnectionImpl>();
@@ -636,7 +630,7 @@ mod tests {
             .send_datagram(Bytes::new())
             .unwrap();
 
-        app.world_mut().entity_mut(endpoint).observe(
+        app.world_mut().entity_mut(connections.endpoint).observe(
             move |trigger: Trigger<EndpointError>,
                   mut endpoint: Query<Endpoint>,
                   mut res: ResMut<HasObserverTriggered>| {
@@ -660,12 +654,6 @@ mod tests {
 
         let connections = connection(&mut app);
 
-        let endpoint = app
-            .world_mut()
-            .query::<(Entity, Endpoint)>()
-            .single(app.world())
-            .0;
-
         app.world_mut().entity_mut(connections.server).despawn();
 
         app.world_mut()
@@ -675,7 +663,7 @@ mod tests {
             .send_datagram(Bytes::new())
             .unwrap();
 
-        app.world_mut().entity_mut(endpoint).observe(
+        app.world_mut().entity_mut(connections.endpoint).observe(
             move |trigger: Trigger<EndpointError>,
                   mut endpoint: Query<Endpoint>,
                   mut res: ResMut<HasObserverTriggered>| {

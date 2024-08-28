@@ -61,6 +61,7 @@ mod tests {
 
     #[derive(Debug)]
     pub(crate) struct ConnectionEntities {
+        pub(crate) endpoint: Entity,
         pub(crate) client: Entity,
         pub(crate) server: Entity,
     }
@@ -150,7 +151,7 @@ mod tests {
 
     pub(crate) fn incoming(app: &mut App) -> ConnectionEntities {
         let endpoint = endpoint();
-        app.world_mut().spawn(endpoint);
+        let endpoint_entity = app.world_mut().spawn(endpoint).id();
 
         let mut endpoint = app
             .world_mut()
@@ -170,7 +171,11 @@ mod tests {
             .query_filtered::<Entity, With<Incoming>>()
             .single_mut(app.world_mut());
 
-        ConnectionEntities { client, server }
+        ConnectionEntities {
+            endpoint: endpoint_entity,
+            client,
+            server,
+        }
     }
 
     pub(crate) fn connection(app: &mut App) -> ConnectionEntities {

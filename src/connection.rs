@@ -935,14 +935,13 @@ pub(crate) fn poll_connections(
 #[cfg(test)]
 mod tests {
     use bevy_ecs::{
-        entity::Entity,
         observer::Trigger,
         system::{Query, ResMut},
     };
     use bytes::Bytes;
     use quinn_proto::crypto::rustls::HandshakeData;
 
-    use crate::{tests::*, Endpoint, IncomingResponse, KeepAlive};
+    use crate::{tests::*, IncomingResponse, KeepAlive};
 
     use super::{
         Connecting, ConnectingError, Connection, ConnectionAccepted, ConnectionDrained,
@@ -959,14 +958,8 @@ mod tests {
             .entity_mut(connections.server)
             .insert(KeepAlive);
 
-        let endpoint = app
-            .world_mut()
-            .query::<(Entity, Endpoint)>()
-            .single(app.world())
-            .0;
-
         // When the endpoint despawns all its associated connections should too
-        app.world_mut().despawn(endpoint);
+        app.world_mut().despawn(connections.endpoint);
 
         app.update();
 
