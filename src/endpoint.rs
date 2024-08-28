@@ -262,11 +262,13 @@ impl EndpointReadOnlyItem<'_> {
         self.endpoint.open_connections()
     }
 
+    #[allow(dead_code)]
     pub(crate) fn max_gso_segments(&self) -> usize {
         self.endpoint.max_gso_segments()
     }
 
     /// Send some data over the network
+    #[allow(dead_code)]
     pub(crate) fn send(
         &self,
         transmit: &quinn_proto::Transmit,
@@ -447,7 +449,7 @@ impl EndpointImpl {
         self.endpoint.set_server_config(server_config.map(Arc::new))
     }
 
-    fn rebind(&mut self, new_socket: std::net::UdpSocket) -> std::io::Result<()> {
+    fn rebind(&mut self, _new_socket: std::net::UdpSocket) -> std::io::Result<()> {
         todo!()
     }
 
