@@ -593,23 +593,104 @@ mod tests {
         event::Events,
         observer::Trigger,
         query::Without,
-        system::{ResMut, Resource},
+        system::{Query, ResMut, Resource},
     };
+    use bytes::Bytes;
 
     use crate::{
-        connection::{Connecting, Connection, ConnectionEstablished},
+        connection::{Connecting, Connection, ConnectionEstablished, ConnectionImpl},
         incoming::NewIncoming,
         tests::*,
         Incoming, IncomingResponse,
     };
 
-    use super::{Endpoint, EndpointBundle};
+    use super::{Endpoint, EndpointBundle, EndpointError};
 
     #[derive(Debug, Resource, Default)]
     struct ConnectionEstablishedEntities(Vec<Entity>);
 
     #[derive(Debug, Resource, Default)]
     struct NewIncomingEntities(Vec<Entity>);
+
+    #[test]
+    fn malformed_connection_error() {
+        let mut app = app_one_error::<EndpointError>();
+        app.init_resource::<HasObserverTriggered>();
+
+        let connections = connection(&mut app);
+
+        let endpoint = app
+            .world_mut()
+            .query::<(Entity, Endpoint)>()
+            .single(app.world())
+            .0;
+
+        app.world_mut()
+            .entity_mut(connections.server)
+            .remove::<ConnectionImpl>();
+
+        app.world_mut()
+            .query::<Connection>()
+            .get_mut(app.world_mut(), connections.client)
+            .unwrap()
+            .send_datagram(Bytes::new())
+            .unwrap();
+
+        app.world_mut().entity_mut(endpoint).observe(
+            move |trigger: Trigger<EndpointError>,
+                  mut endpoint: Query<Endpoint>,
+                  mut res: ResMut<HasObserverTriggered>| {
+                let _ = endpoint.get_mut(trigger.entity()).unwrap();
+                assert!(matches!(
+                    trigger.event(),
+                    &EndpointError::MalformedConnectionEntity(e) if e == connections.server
+                ));
+                res.0 = true;
+            },
+        );
+
+        app.update();
+        app.update();
+    }
+
+    #[test]
+    fn missing_connection_error() {
+        let mut app = app_one_error::<EndpointError>();
+        app.init_resource::<HasObserverTriggered>();
+
+        let connections = connection(&mut app);
+
+        let endpoint = app
+            .world_mut()
+            .query::<(Entity, Endpoint)>()
+            .single(app.world())
+            .0;
+
+        app.world_mut().entity_mut(connections.server).despawn();
+
+        app.world_mut()
+            .query::<Connection>()
+            .get_mut(app.world_mut(), connections.client)
+            .unwrap()
+            .send_datagram(Bytes::new())
+            .unwrap();
+
+        app.world_mut().entity_mut(endpoint).observe(
+            move |trigger: Trigger<EndpointError>,
+                  mut endpoint: Query<Endpoint>,
+                  mut res: ResMut<HasObserverTriggered>| {
+                let _ = endpoint.get_mut(trigger.entity()).unwrap();
+                assert!(matches!(
+                    trigger.event(),
+                    &EndpointError::MissingConnectionEntity(e) if e == connections.server
+                ));
+                res.0 = true;
+            },
+        );
+
+        app.update();
+        app.update();
+    }
 
     fn setup_app() -> App {
         let mut app = app_no_errors();
