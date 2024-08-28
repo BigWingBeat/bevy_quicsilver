@@ -265,3 +265,143 @@ pub(crate) fn handle_incoming_responses(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use bevy_ecs::{entity::Entity, observer::Trigger, query::With, system::ResMut};
+
+    use crate::{tests::*, Endpoint, KeepAlive};
+
+    use super::{Incoming, IncomingError, IncomingResponse, NewIncoming};
+
+    #[test]
+    fn malformed_entity_error() {
+        let mut app = app_one_error::<IncomingError>();
+        app.init_resource::<HasObserverTriggered>();
+
+        let entity = app.world_mut().spawn_empty().id();
+
+        app.world_mut().send_event(IncomingResponse::accept(entity));
+
+        app.world_mut().entity_mut(entity).observe(
+            |trigger: Trigger<IncomingError>, mut res: ResMut<HasObserverTriggered>| {
+                assert!(matches!(trigger.event(), IncomingError::MalformedEntity));
+                res.0 = true;
+            },
+        );
+
+        app.update();
+    }
+
+    #[test]
+    fn missing_entity_error() {
+        let mut app = app_one_error::<IncomingError>();
+        app.init_resource::<HasObserverTriggered>();
+
+        let entity = Entity::PLACEHOLDER;
+
+        app.world_mut().send_event(IncomingResponse::accept(entity));
+
+        app.observe(
+            move |trigger: Trigger<IncomingError>, mut res: ResMut<HasObserverTriggered>| {
+                assert_eq!(trigger.entity(), entity);
+                assert!(matches!(trigger.event(), IncomingError::MissingEntity));
+                res.0 = true;
+            },
+        );
+
+        app.update();
+    }
+
+    #[test]
+    fn retry_error() {
+        let mut app = app_one_error::<IncomingError>();
+        app.init_resource::<HasObserverTriggered>();
+
+        let connections = incoming(&mut app);
+
+        app.world_mut()
+            .send_event(IncomingResponse::retry(connections.server));
+
+        app.update();
+        app.update();
+        app.update();
+
+        let incoming = app
+            .world_mut()
+            .query_filtered::<Entity, With<Incoming>>()
+            .single(app.world());
+
+        app.world_mut()
+            .send_event(IncomingResponse::retry(incoming));
+
+        app.world_mut().entity_mut(incoming).observe(
+            |trigger: Trigger<IncomingError>, mut res: ResMut<HasObserverTriggered>| {
+                assert!(matches!(trigger.event(), IncomingError::RetryError));
+                res.0 = true;
+            },
+        );
+
+        app.update();
+    }
+
+    #[test]
+    fn new_incoming() {
+        let mut app = app_no_errors();
+        app.init_resource::<HasObserverTriggered>();
+
+        let endpoint = endpoint();
+        app.world_mut().spawn(endpoint);
+
+        let mut endpoint = app
+            .world_mut()
+            .query::<Endpoint>()
+            .single_mut(app.world_mut());
+
+        let addr = endpoint.local_addr().unwrap();
+
+        let connecting = endpoint.connect(addr, "localhost").unwrap();
+        app.world_mut().spawn(connecting);
+
+        app.update();
+
+        app.observe(test_observer::<NewIncoming, &Incoming>());
+
+        app.update();
+    }
+
+    #[test]
+    fn keepalive() {
+        let mut app = app_no_errors();
+
+        let connections = incoming(&mut app);
+
+        app.world_mut()
+            .entity_mut(connections.server)
+            .insert(KeepAlive);
+
+        app.world_mut()
+            .send_event(IncomingResponse::ignore(connections.server));
+
+        app.update();
+
+        assert!(!app
+            .world()
+            .entity(connections.server)
+            .contains::<Incoming>());
+    }
+
+    #[test]
+    fn no_keepalive() {
+        let mut app = app_no_errors();
+
+        let connections = incoming(&mut app);
+
+        app.world_mut()
+            .send_event(IncomingResponse::ignore(connections.server));
+
+        app.update();
+
+        assert!(app.world_mut().get_entity(connections.server).is_none());
+    }
+}
