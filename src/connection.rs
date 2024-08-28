@@ -951,8 +951,7 @@ mod tests {
 
     #[test]
     fn keepalive() {
-        // Exclude ConnectionError because it fires when connection closes
-        let mut app = app_one_error::<ConnectionError>();
+        let mut app = app_no_errors();
 
         let connections = connection(&mut app);
 
