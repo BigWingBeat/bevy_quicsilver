@@ -61,7 +61,7 @@ enum IncomingResponseType {
 
 impl IncomingResponse {
     /// Attempt to accept this incoming connection. If no errors occur, the [`Incoming`] component on the specified entity will
-    /// be replaced with a [`Connecting`] component, and a [`ConnectionAccepted`] event will be fired.
+    /// be replaced with a [`Connecting`](crate::Connecting) component, and a [`ConnectionAccepted`] event will be fired.
     pub fn accept(entity: Entity) -> Self {
         Self {
             entity,
@@ -70,8 +70,8 @@ impl IncomingResponse {
     }
 
     /// Attempt to accept this incoming connection, using a custom configuration.
-    /// If no errors occur, the [`Incoming`] component on the specified entity will be replaced with a [`Connecting`] component,
-    /// and a [`ConnectionAccepted`] event will be fired.
+    /// If no errors occur, the [`Incoming`] component on the specified entity will be replaced with a [`Connecting`](crate::Connecting)
+    /// component, and a [`ConnectionAccepted`] event will be fired.
     pub fn accept_with(entity: Entity, config: Arc<ServerConfig>) -> Self {
         Self {
             entity,

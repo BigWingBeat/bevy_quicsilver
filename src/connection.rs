@@ -50,7 +50,7 @@ pub enum ConnectionError {
 }
 
 /// An observer trigger that is fired when a new incoming connection is accepted,
-/// and has been changed from an [`Incoming`] entity to a [`Connecting`] entity.
+/// and has been changed from an [`Incoming`](crate::Incoming) entity to a [`Connecting`] entity.
 #[derive(Debug, bevy_ecs::event::Event)]
 pub struct ConnectionAccepted;
 
@@ -64,7 +64,7 @@ pub struct ConnectionEstablished;
 pub struct ConnectionDrained;
 
 /// An observer trigger that is fired when a [`Connecting`] entity's handshake data becomes available.
-/// After this trigger is fired, [`Connecting::handshake_data()`] will begin returning [`Some`].
+/// After this trigger is fired, [`Connecting::handshake_data()`](ConnectingItem::handshake_data) will begin returning [`Some`].
 #[derive(Debug, bevy_ecs::event::Event)]
 pub struct HandshakeDataReady;
 
@@ -129,7 +129,7 @@ impl ConnectingItem<'_> {
     /// Parameters negotiated during the handshake.
     ///
     /// Returns `None` until the [`HandshakeDataReady`] observer trigger is fired for this entity.
-    /// The dynamic type returned is determined by the configured [`Session`].
+    /// The dynamic type returned is determined by the configured [`Session`](crate::crypto::Session).
     /// For the default `rustls` session, it can be [`downcast`](Box::downcast) to a
     /// [`crypto::rustls::HandshakeData`](quinn_proto::crypto::rustls::HandshakeData).
     pub fn handshake_data(&self) -> Option<Box<dyn Any>> {
@@ -138,7 +138,7 @@ impl ConnectingItem<'_> {
 
     /// The peer's UDP address.
     ///
-    /// If [`ServerConfig::migration()`] is `true`, clients may change addresses at will, e.g. when
+    /// If [`ServerConfig::migration()`](crate::ServerConfig::migration) is `true`, clients may change addresses at will, e.g. when
     /// switching to a cellular internet connection.
     pub fn remote_address(&self) -> SocketAddr {
         self.connection.remote_address()
@@ -253,7 +253,7 @@ impl ConnectionItem<'_> {
     ///
     /// Returns `None` if outgoing bidirectional streams are currently exhausted.
     ///
-    /// [`open_bi()`]: crate::Connection::open_bi
+    /// [`open_bi()`]: Self::open_bi
     /// [`SendStream`]: crate::SendStream
     /// [`RecvStream`]: crate::RecvStream
     pub fn open_bi(&mut self) -> Option<StreamId> {
@@ -280,7 +280,7 @@ impl ConnectionItem<'_> {
     /// Returns `None` if there are no new incoming bidirectional streams for this connection.
     /// Has no impact on the data flow-control or stream concurrency limits.
     ///
-    /// [`open_bi()`]: crate::Connection::open_bi
+    /// [`open_bi()`]: Self::open_bi
     /// [`SendStream`]: crate::SendStream
     /// [`RecvStream`]: crate::RecvStream
     pub fn accept_bi(&mut self) -> Option<StreamId> {
@@ -322,7 +322,7 @@ impl ConnectionItem<'_> {
     ///
     /// See [`send_datagram()`] for details.
     ///
-    /// [`send_datagram()`]: Connection::send_datagram
+    /// [`send_datagram()`]: Self::send_datagram
     pub fn send_datagram_wait(&mut self, data: Bytes) -> Result<(), SendDatagramError> {
         self.connection.send_datagram_wait(data)
     }
@@ -355,7 +355,7 @@ impl ConnectionItem<'_> {
 
     /// The peer's UDP address.
     ///
-    /// If [`ServerConfig::migration()`] is `true`, clients may change addresses at will, e.g. when
+    /// If [`ServerConfig::migration()`](crate::ServerConfig::migration) is `true`, clients may change addresses at will, e.g. when
     /// switching to a cellular internet connection.
     pub fn remote_address(&self) -> SocketAddr {
         self.connection.remote_address()
@@ -390,7 +390,7 @@ impl ConnectionItem<'_> {
     /// Parameters negotiated during the handshake.
     ///
     /// Guranteed to return `Some` on fully established connections.
-    /// The dynamic type returned is determined by the configured [`Session`].
+    /// The dynamic type returned is determined by the configured [`Session`](crate::crypto::Session).
     /// For the default `rustls` session, it can be [`downcast`](Box::downcast) to a
     /// [`crypto::rustls::HandshakeData`](crate::crypto::rustls::HandshakeData).
     pub fn handshake_data(&self) -> Option<Box<dyn Any>> {
@@ -399,7 +399,7 @@ impl ConnectionItem<'_> {
 
     /// Cryptographic identity of the peer.
     ///
-    /// The dynamic type returned is determined by the configured [`Session`].
+    /// The dynamic type returned is determined by the configured [`Session`](crate::crypto::Session).
     /// For the default `rustls` session, it can be [`downcast`](Box::downcast) to a
     /// <code>Vec<[rustls::pki_types::CertificateDer]></code>.
     pub fn peer_identity(&self) -> Option<Box<dyn Any>> {
@@ -457,7 +457,7 @@ impl ConnectionReadOnlyItem<'_> {
 
     /// The peer's UDP address.
     ///
-    /// If [`ServerConfig::migration()`] is `true`, clients may change addresses at will, e.g. when
+    /// If [`ServerConfig::migration()`](crate::ServerConfig::migration) is `true`, clients may change addresses at will, e.g. when
     /// switching to a cellular internet connection.
     pub fn remote_address(&self) -> SocketAddr {
         self.connection.remote_address()
@@ -492,7 +492,7 @@ impl ConnectionReadOnlyItem<'_> {
     /// Parameters negotiated during the handshake.
     ///
     /// Guranteed to return `Some` on fully established connections.
-    /// The dynamic type returned is determined by the configured [`Session`].
+    /// The dynamic type returned is determined by the configured [`Session`](crate::crypto::Session).
     /// For the default `rustls` session, it can be [`downcast`](Box::downcast) to a
     /// [`crypto::rustls::HandshakeData`](crate::crypto::rustls::HandshakeData).
     pub fn handshake_data(&self) -> Option<Box<dyn Any>> {
@@ -501,7 +501,7 @@ impl ConnectionReadOnlyItem<'_> {
 
     /// Cryptographic identity of the peer.
     ///
-    /// The dynamic type returned is determined by the configured [`Session`].
+    /// The dynamic type returned is determined by the configured [`Session`](crate::crypto::Session).
     /// For the default `rustls` session, it can be [`downcast`](Box::downcast) to a
     /// <code>Vec<[rustls::pki_types::CertificateDer]></code>.
     pub fn peer_identity(&self) -> Option<Box<dyn Any>> {

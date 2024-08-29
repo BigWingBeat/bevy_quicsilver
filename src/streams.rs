@@ -89,7 +89,7 @@ impl<'a> SendStream<'a> {
     ///
     /// Returns `Ok(Some(_))` with the stop error code when the stream is stopped by the peer.
     /// Returns `Ok(None)` if the stream is still alive and has not been stopped.
-    /// Returns `Err` when the stream is [`finish()`](Self::finish)ed or [`reset()`] locally and all stream data has been
+    /// Returns `Err` when the stream is [`finish()`](Self::finish)ed or [`reset()`](Self::reset) locally and all stream data has been
     /// received (but not necessarily processed) by the peer, after which it is no longer meaningful
     /// for the stream to be stopped.
     pub fn stopped(&self) -> Result<Option<VarInt>, ClosedStream> {
@@ -155,9 +155,9 @@ impl<'a> SendStream<'a> {
 /// ## Data never received on a remotely-opened stream
 ///
 /// Verify that the stream you are receiving is the same one that the server is sending on, e.g. by
-/// logging the [`id`] of each. Streams are always accepted in the same order as they are created,
+/// logging the [`id`](Self::id) of each. Streams are always accepted in the same order as they are created,
 /// i.e. ascending order by [`StreamId`]. For example, even if a sender first transmits on
-/// bidirectional stream 1, the first stream returned by [`Connection::accept_bi`] on the receiver
+/// bidirectional stream 1, the first stream returned by [`Connection::accept_bi`](crate::query::ConnectionItem::accept_bi) on the receiver
 /// will be bidirectional stream 0.
 pub struct RecvStream<'a> {
     pub(crate) id: StreamId,

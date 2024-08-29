@@ -13,7 +13,7 @@ pub use quinn_proto::{
 mod connection;
 pub use connection::{
     Connecting, ConnectingBundle, ConnectingError, Connection, ConnectionAccepted,
-    ConnectionDrained, ConnectionError, ConnectionEstablished,
+    ConnectionDrained, ConnectionError, ConnectionEstablished, HandshakeDataReady,
 };
 
 pub mod crypto;
