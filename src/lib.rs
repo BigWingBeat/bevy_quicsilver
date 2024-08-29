@@ -22,7 +22,7 @@ mod plugin;
 mod socket;
 mod streams;
 
-/// Automatically generated types for ECS queries
+/// Automatically generated types for ECS queries.
 pub mod query {
     pub use crate::connection::{
         ConnectingItem, ConnectionItem, ConnectionReadOnly, ConnectionReadOnlyItem,
@@ -32,7 +32,7 @@ pub mod query {
 
 /// If this component is placed on an entity, it will never be automatically despawned by this library.
 /// For example, closing a connection normally results in the entity being despawned, but if this component
-/// is on the entity, instead only the connection components will be removed from the entity, and it will not be despawned
+/// is on the entity, instead only the connection components will be removed from the entity, and it will not be despawned.
 #[derive(Debug, Component)]
 pub struct KeepAlive;
 

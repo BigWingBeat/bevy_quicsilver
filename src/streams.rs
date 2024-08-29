@@ -5,7 +5,7 @@ use quinn_proto::{
 };
 use thiserror::Error;
 
-/// A stream that can only be used to send data.
+/// A stream that can be used to send data.
 pub struct SendStream<'a> {
     pub(crate) id: StreamId,
     pub(crate) write_buffer: &'a mut Vec<Bytes>,
@@ -13,7 +13,7 @@ pub struct SendStream<'a> {
 }
 
 impl<'a> SendStream<'a> {
-    /// Get the ID of the stream
+    /// Get the ID of the stream.
     pub fn id(&self) -> StreamId {
         self.id
     }
@@ -75,8 +75,6 @@ impl<'a> SendStream<'a> {
         match self.proto_stream.write_chunks(data) {
             Ok(written) => {
                 self.write_buffer.extend_from_slice(&data[written.chunks..]);
-                // self.write_buffer
-                //     .extend(data.iter().filter(|&bytes| !bytes.is_empty()).cloned());
                 Ok(())
             }
             Err(WriteError::Blocked) => {
@@ -87,7 +85,7 @@ impl<'a> SendStream<'a> {
         }
     }
 
-    /// Check if the stream was stopped by the peer, get the reason if it was
+    /// Check if the stream was stopped by the peer, get the reason if it was.
     ///
     /// Returns `Ok(Some(_))` with the stop error code when the stream is stopped by the peer.
     /// Returns `Ok(None)` if the stream is still alive and has not been stopped.
@@ -98,7 +96,7 @@ impl<'a> SendStream<'a> {
         self.proto_stream.stopped()
     }
 
-    /// Notify the peer that no more data will ever be written to this stream
+    /// Notify the peer that no more data will ever be written to this stream.
     ///
     /// It is an error to write to a [`SendStream`] after `finish()`ing it. [`reset()`](Self::reset)
     /// may still be called after `finish` to abandon transmission of any stream data that might
@@ -126,7 +124,7 @@ impl<'a> SendStream<'a> {
         self.proto_stream.reset(error_code)
     }
 
-    /// Set the priority of the stream
+    /// Set the priority of the stream.
     ///
     /// Every send stream has an initial priority of 0. Locally buffered data from streams with
     /// higher priority will be transmitted before data from streams with lower priority. Changing
@@ -137,13 +135,13 @@ impl<'a> SendStream<'a> {
         self.proto_stream.set_priority(priority)
     }
 
-    /// Get the priority of the stream
+    /// Get the priority of the stream.
     pub fn priority(&self) -> Result<i32, ClosedStream> {
         self.proto_stream.priority()
     }
 }
 
-/// A stream that can only be used to receive data.
+/// A stream that can be used to receive data.
 ///
 /// # Common issues
 ///
@@ -166,20 +164,17 @@ pub struct RecvStream<'a> {
     pub(crate) proto_stream: quinn_proto::RecvStream<'a>,
 }
 
-/// Errors that can occur when reading data from a [`RecvStream`]
+/// Errors that can occur when reading data from a [`RecvStream`].
 #[derive(Debug, Error)]
 pub enum RecvError {
     /// No more data is currently available on this stream.
-    ///
-    /// If more data on this stream is received from the peer, an `Event::StreamReadable` will be
-    /// generated for this stream, indicating that retrying the read might succeed.
     #[error("Stream blocked")]
     Blocked,
     /// The peer abandoned transmitting data on this stream, by calling [`SendStream::reset()`].
-    /// Includes an application-defined error code
+    /// Includes an application-defined error code.
     #[error("Stream reset by peer. Error code: {0}")]
     Reset(VarInt),
-    /// The stream does not exist, or has already been stopped, finished or reset
+    /// The stream does not exist, or has already been stopped, finished or reset.
     #[error("Stream does not exist or has been closed")]
     ClosedStream,
     /// Attempted an ordered read following an unordered read.
@@ -211,7 +206,7 @@ impl From<ReadableError> for RecvError {
 
 /// Hack to automatically call finalize on quinn chunks before dropping them, because otherwise they panic.
 /// finalize consumes self but drop gives you &mut self, so Option::take is needed to make this work.
-/// This makes writing functions that use chunks way better as you don't need to put calls to finalize everywhere
+/// This makes writing functions that use chunks way better as you don't need to put calls to finalize everywhere.
 struct Chunks<'a>(Option<quinn_proto::Chunks<'a>>);
 
 impl Chunks<'_> {
@@ -228,12 +223,13 @@ impl<'a> From<quinn_proto::Chunks<'a>> for Chunks<'a> {
 
 impl Drop for Chunks<'_> {
     fn drop(&mut self) {
+        // All methods for accessing streams set `should_poll = true`, so if a transmit is needed the next poll will handle it
         let _ = self.0.take().unwrap().finalize();
     }
 }
 
 impl<'a> RecvStream<'a> {
-    /// Get the ID of the stream
+    /// Get the ID of the stream.
     pub fn id(&self) -> StreamId {
         self.id
     }
@@ -322,7 +318,7 @@ impl<'a> RecvStream<'a> {
         Ok(Some(read))
     }
 
-    /// Stop accepting data
+    /// Stop accepting data.
     ///
     /// Discards unread data and notifies the peer to stop transmitting. Once stopped, further
     /// attempts to operate on a stream will return `ClosedStream` errors.
@@ -330,7 +326,7 @@ impl<'a> RecvStream<'a> {
         self.proto_stream.stop(error_code)
     }
 
-    /// Check whether the stream has been reset by the peer, returning the reset error code if so
+    /// Check whether the stream has been reset by the peer, returning the reset error code if so.
     ///
     /// After returning `Ok(Some(_))` once, stream state will be discarded and all future calls will
     /// return `Err(ClosedStream)`.
