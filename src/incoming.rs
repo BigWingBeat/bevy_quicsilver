@@ -20,7 +20,7 @@ use crate::{
     KeepAlive,
 };
 
-/// An observer trigger that is fired whenever an [`Incoming`] entity encounters an error
+/// An observer trigger that is fired whenever an [`Incoming`] entity encounters an error.
 #[derive(Debug, Error, Event)]
 pub enum IncomingError {
     /// An [`IncomingResponse`] event was raised for an entity that does not have an [`Incoming`] component
@@ -38,13 +38,13 @@ pub enum IncomingError {
 }
 
 /// An observer trigger that is fired whenever an endpoint receives a new incoming client connection.
-/// The specified entity will have an [`Incoming`] component
+/// The specified entity will have an [`Incoming`] component.
 #[derive(Debug, Event)]
 pub struct NewIncoming;
 
-/// How to respond to an incoming client connection.
+/// An event type that specifies how to respond to an incoming client connection.
 ///
-/// Errors if the specified entity does not exist, or does not have an [`Incoming`] component
+/// Errors if the specified entity does not exist, or does not have an [`Incoming`] component.
 #[derive(Debug, Clone, Event)]
 pub struct IncomingResponse {
     entity: Entity,
@@ -61,7 +61,7 @@ enum IncomingResponseType {
 
 impl IncomingResponse {
     /// Attempt to accept this incoming connection. If no errors occur, the [`Incoming`] component on the specified entity will
-    /// be replaced with a [`Connecting`] component
+    /// be replaced with a [`Connecting`] component, and a [`ConnectionAccepted`] event will be fired.
     pub fn accept(entity: Entity) -> Self {
         Self {
             entity,
@@ -70,7 +70,8 @@ impl IncomingResponse {
     }
 
     /// Attempt to accept this incoming connection, using a custom configuration.
-    /// If no errors occur, the [`Incoming`] component on the specified entity will be replaced with a [`Connecting`] component
+    /// If no errors occur, the [`Incoming`] component on the specified entity will be replaced with a [`Connecting`] component,
+    /// and a [`ConnectionAccepted`] event will be fired.
     pub fn accept_with(entity: Entity, config: Arc<ServerConfig>) -> Self {
         Self {
             entity,
@@ -110,7 +111,7 @@ impl IncomingResponse {
     }
 }
 
-/// A new incoming connection from a client
+/// A new incoming connection from a client.
 ///
 /// # Usage
 /// ```
@@ -156,24 +157,24 @@ impl Incoming {
     /// the endpoint is bound to a wildcard address like `0.0.0.0` or `::`.
     ///
     /// This will return `None` for clients, or when the platform does not expose this
-    /// information. See [`quinn_udp::RecvMeta::dst_ip`] for a list of supported platforms
+    /// information. See [`quinn_udp::RecvMeta::dst_ip`] for a list of supported platforms.
     pub fn local_ip(&self) -> Option<IpAddr> {
         self.incoming.local_ip()
     }
 
-    /// The peer's UDP address
+    /// The peer's UDP address.
     pub fn remote_address(&self) -> SocketAddr {
         self.incoming.remote_address()
     }
 
-    /// Whether the socket addess that is initiating this connection has been validated
+    /// Whether the socket addess that is initiating this connection has been validated.
     ///
-    /// This means that the sender of the initial packet has proved that they can receive traffic sent to [`self.remote_address()`]
+    /// This means that the sender of the initial packet has proved that they can receive traffic sent to [`self.remote_address()`].
     pub fn remote_address_validated(&self) -> bool {
         self.incoming.remote_address_validated()
     }
 
-    /// The entity that has the [`Endpoint`] component that is receiving this connection
+    /// The entity that has the [`Endpoint`] component that is receiving this connection.
     pub fn endpoint(&self) -> Entity {
         self.endpoint_entity
     }
