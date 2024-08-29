@@ -291,17 +291,13 @@ impl ConnectionItem<'_> {
     }
 
     /// Get the send stream associated with the given stream ID.
-    ///
-    /// # Panics
-    /// Panics if the given stream ID is not associated with a send stream.
+    /// Returns an error if the stream does not exist, or has already been stopped, finished or reset.
     pub fn send_stream(&mut self, id: StreamId) -> Result<SendStream<'_>, ClosedStream> {
         self.connection.send_stream(id)
     }
 
     /// Get the receive stream associated with the given stream ID.
-    ///
-    /// # Panics
-    /// Panics if the given stream ID is not associated with a receive stream.
+    /// Returns an error if the stream does not exist, or has already been stopped, finished or reset.
     pub fn recv_stream(&mut self, id: StreamId) -> Result<RecvStream<'_>, ClosedStream> {
         self.connection.recv_stream(id)
     }
@@ -635,20 +631,23 @@ impl ConnectionImpl {
         self.should_poll = true;
         self.pending_streams
             .get_mut(&id)
-            .ok_or(ClosedStream::new())
+            .filter(|_| id.dir() == Dir::Bi || id.initiator() == self.connection.side())
             .map(|write_buffer| SendStream {
                 id,
                 write_buffer,
                 proto_stream: self.connection.send_stream(id),
             })
+            .ok_or_else(ClosedStream::new)
     }
 
     pub(crate) fn recv_stream(&mut self, id: StreamId) -> Result<RecvStream<'_>, ClosedStream> {
         self.should_poll = true;
-        Ok(RecvStream {
-            id,
-            proto_stream: self.connection.recv_stream(id),
-        })
+        (id.dir() == Dir::Bi || id.initiator() != self.connection.side())
+            .then(|| RecvStream {
+                id,
+                proto_stream: self.connection.recv_stream(id),
+            })
+            .ok_or_else(ClosedStream::new)
     }
 
     fn send_datagram(&mut self, data: Bytes) -> Result<(), SendDatagramError> {
