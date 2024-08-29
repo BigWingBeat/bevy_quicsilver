@@ -9,6 +9,19 @@ use crate::{
     IncomingResponse, NewIncoming,
 };
 
+/// The library plugin. Adding this to your [`App`] is the first thing to do when using this library.
+///
+/// # Usage
+/// ```
+/// # use bevy_app::{App, AppExit};
+/// # use bevy_quicsilver::QuicPlugin;
+/// fn main() -> AppExit {
+///     App::new()
+///         .add_plugins(QuicPlugin)
+///         /* ... */
+///         .run()
+/// }
+/// ```
 #[derive(Debug)]
 pub struct QuicPlugin;
 

@@ -68,7 +68,11 @@ pub struct ConnectionDrained;
 #[derive(Debug, bevy_ecs::event::Event)]
 pub struct HandshakeDataReady;
 
-/// A bundle for adding a new connection to an entity
+/// A bundle for adding a new connection to an entity.
+///
+/// Once this bundle is spawned or inserted onto an entity, that entity can be queried for with the [`Connecting`] query parameter,
+/// until a [`ConnectionEstablished`] trigger is fired for the entity, after which it can no longer be queried by [`Connecting`],
+/// and must instead be queried with [`Connection`].
 #[derive(Debug, Bundle)]
 pub struct ConnectingBundle {
     marker: StillConnecting,
@@ -102,6 +106,17 @@ impl Component for StillConnecting {
 }
 
 /// A query parameter for an in-progress connection attempt, that has not yet been fully established
+///
+/// # Usage
+/// ```
+/// # use bevy_ecs::Query;
+/// # use bevy_quicsilver::Connecting;
+/// fn my_system(query: Query<Connecting>) {
+///     for connection in query.iter() {
+///         println!("{}", connection.remote_address());
+///     }
+/// }
+/// ```
 #[derive(Debug, QueryData)]
 pub struct Connecting {
     marker: &'static StillConnecting,

@@ -22,7 +22,7 @@ use crate::{
     KeepAlive, KeepAliveEntityCommandsExt,
 };
 
-/// An observer trigger that is fired when an endpoint encounters an error
+/// An observer trigger that is fired when an [`Endpoint`] encounters an error
 #[derive(Debug, Error, Event)]
 pub enum EndpointError {
     /// A connection entity has had its connection component(s) unexpectedly removed
@@ -36,7 +36,7 @@ pub enum EndpointError {
     IoError(std::io::Error),
 }
 
-/// A bundle for adding an [`Endpoint`] to an entity, and the main entrypoint into the library.
+/// A bundle for adding an [`Endpoint`] to an entity
 #[derive(Debug, Bundle)]
 pub struct EndpointBundle(EndpointImpl);
 
@@ -128,12 +128,12 @@ impl EndpointBundle {
 /// # use bevy_app::{App, Update};
 /// # use bevy_ecs::prelude::Query;
 /// # use bevy_quicsilver::{QuicPlugin, Endpoint};
-///
+/// #
 /// # let mut app = App::new();
 /// # app.add_plugins(QuicPlugin);
 /// # app.add_systems(Update, my_system);
 /// # app.update();
-///
+/// #
 /// fn my_system(query: Query<Endpoint>) {
 ///     for endpoint in query.iter() {
 ///         println!("{}", endpoint.open_connections());
