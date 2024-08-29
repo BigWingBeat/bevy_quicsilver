@@ -3,7 +3,7 @@
 
 use bevy_ecs::{bundle::Bundle, component::Component, system::EntityCommands};
 
-pub use quinn_proto::{ClientConfig, ServerConfig};
+pub use quinn_proto::{ClientConfig, ServerConfig, StreamId, VarInt};
 
 pub use connection::{
     Connecting, ConnectingBundle, ConnectingError, Connection, ConnectionAccepted,

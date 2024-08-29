@@ -11,15 +11,14 @@ use bevy_ecs::{
     system::{Commands, Query, Res, ResMut, Resource},
 };
 use bevy_quicsilver::{
-    ConnectingError, Connection, ConnectionDrained, ConnectionError, ConnectionEstablished,
-    Endpoint, EndpointBundle, QuicPlugin, RecvError,
+    ClientConfig, ConnectingError, Connection, ConnectionDrained, ConnectionError,
+    ConnectionEstablished, Endpoint, EndpointBundle, QuicPlugin, RecvError, StreamId, VarInt,
 };
 use bevy_state::{
     app::{AppExtStates, StatesPlugin},
     prelude::in_state,
     state::{NextState, OnEnter, States},
 };
-use quinn_proto::{ClientConfig, StreamId, VarInt};
 use rustls::{pki_types::CertificateDer, RootCertStore};
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash, States)]
