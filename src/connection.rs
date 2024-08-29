@@ -27,7 +27,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// An observer trigger that is fired whenever a [`Connecting`] entity encounters an error
+/// An observer trigger that is fired whenever a [`Connecting`] entity encounters an error.
 #[derive(Debug, Error, bevy_ecs::event::Event)]
 pub enum ConnectingError {
     /// The connection was lost
@@ -38,7 +38,7 @@ pub enum ConnectingError {
     IoError(std::io::Error),
 }
 
-/// An observer trigger that is fired whenever a [`Connection`] entity encounters an error
+/// An observer trigger that is fired whenever a [`Connection`] entity encounters an error.
 #[derive(Debug, Error, bevy_ecs::event::Event)]
 pub enum ConnectionError {
     /// The connection was lost
@@ -50,21 +50,21 @@ pub enum ConnectionError {
 }
 
 /// An observer trigger that is fired when a new incoming connection is accepted,
-/// and has been changed from an [`Incoming`] entity to a [`Connecting`] entity
+/// and has been changed from an [`Incoming`] entity to a [`Connecting`] entity.
 #[derive(Debug, bevy_ecs::event::Event)]
 pub struct ConnectionAccepted;
 
 /// An observer trigger that is fired when a connection is successfully established,
-/// and has been changed from a [`Connecting`] entity to a [`Connection`] entity
+/// and has been changed from a [`Connecting`] entity to a [`Connection`] entity.
 #[derive(Debug, bevy_ecs::event::Event)]
 pub struct ConnectionEstablished;
 
-/// An observer trigger that is fired when a connection has been fully closed, and is just about to be despawned
+/// An observer trigger that is fired when a connection has been fully closed, and is just about to be despawned.
 #[derive(Debug, bevy_ecs::event::Event)]
 pub struct ConnectionDrained;
 
 /// An observer trigger that is fired when a [`Connecting`] entity's handshake data becomes available.
-/// After this trigger is fired, [`Connecting::handshake_data()`] will begin returning [`Some`]
+/// After this trigger is fired, [`Connecting::handshake_data()`] will begin returning [`Some`].
 #[derive(Debug, bevy_ecs::event::Event)]
 pub struct HandshakeDataReady;
 
@@ -88,7 +88,7 @@ impl ConnectingBundle {
     }
 }
 
-/// Marker component type for connection entities that have not yet been fully established
+/// Marker component type for connection entities that have not yet been fully established.
 /// (i.e. exposed to the user through [`Connecting`])
 #[derive(Debug)]
 struct StillConnecting;
@@ -105,7 +105,8 @@ impl Component for StillConnecting {
     }
 }
 
-/// A query parameter for an in-progress connection attempt, that has not yet been fully established
+/// A query parameter for an in-progress connection attempt, that has not yet been fully established.
+/// For available methods when querying entities with this type, see [`ConnectingItem`].
 ///
 /// # Usage
 /// ```
@@ -135,7 +136,7 @@ impl ConnectingItem<'_> {
         self.connection.handshake_data()
     }
 
-    /// The peer's UDP address
+    /// The peer's UDP address.
     ///
     /// If [`ServerConfig::migration()`] is `true`, clients may change addresses at will, e.g. when
     /// switching to a cellular internet connection.
@@ -149,18 +150,18 @@ impl ConnectingItem<'_> {
     /// the endpoint is bound to a wildcard address like `0.0.0.0` or `::`.
     ///
     /// This will return `None` for clients, or when the platform does not expose this
-    /// information. See [`quinn_udp::RecvMeta::dst_ip`] for a list of supported platforms
+    /// information. See [`quinn_udp::RecvMeta::dst_ip`] for a list of supported platforms.
     pub fn local_ip(&self) -> Option<IpAddr> {
         self.connection.local_ip()
     }
 
-    /// Returns connection statistics
+    /// Returns connection statistics.
     pub fn stats(&self) -> ConnectionStats {
         self.connection.stats()
     }
 }
 
-/// Marker component type for connection entities that are fully established
+/// Marker component type for connection entities that are fully established.
 /// (i.e. exposed to the user through [`Connection`])
 #[derive(Debug)]
 pub(crate) struct FullyConnected;
@@ -175,7 +176,20 @@ impl Component for FullyConnected {
     }
 }
 
-/// A query parameter for a fully established QUIC connection
+/// A query parameter for a fully established QUIC connection.
+/// For available methods when querying entities with this type, see [`ConnectionItem`] and [`ConnectionReadOnlyItem`].
+///
+/// # Usage
+/// ```
+/// # use bevy_ecs::system::{Query, assert_is_system};
+/// # use bevy_quicsilver::Connection;
+/// fn my_system(query: Query<Connection>) {
+///     for connection in query.iter() {
+///         println!("{}", connection.remote_address());
+///     }
+/// }
+/// # assert_is_system(my_system);
+/// ```
 #[derive(Debug, QueryData)]
 #[query_data(mutable)]
 pub struct Connection {
@@ -192,7 +206,8 @@ impl ConnectionItem<'_> {
     /// error such as a time-out or certificate validation failure.
     ///
     /// When the connection becomes closed, a [`ConnectionError`] event is fired, and after a brief timeout,
-    /// the entity is despawned. If the entity has a [`KeepAlive`] component, only the connection component is removed instead.
+    /// the connection becomes drained, and the entity is despawned.
+    /// If the entity has a [`KeepAlive`] component, only the connection component is removed instead.
     pub fn is_closed(&self) -> bool {
         self.connection.is_closed()
     }
@@ -288,7 +303,7 @@ impl ConnectionItem<'_> {
         self.connection.recv_stream(id)
     }
 
-    /// Transmit `data` as an unreliable, unordered application datagram
+    /// Transmit `data` as an unreliable, unordered application datagram.
     ///
     /// Application datagrams are a low-level primitive. They may be lost or delivered out of order,
     /// and `data` must both fit inside a single QUIC packet and be smaller than the maximum size
@@ -300,7 +315,7 @@ impl ConnectionItem<'_> {
         self.connection.send_datagram(data)
     }
 
-    /// Transmit `data` as an unreliable, unordered application datagram
+    /// Transmit `data` as an unreliable, unordered application datagram.
     ///
     /// Unlike [`send_datagram()`], this method will wait for buffer space during congestion
     /// conditions, which effectively prioritizes old datagrams over new datagrams.
@@ -312,7 +327,8 @@ impl ConnectionItem<'_> {
         self.connection.send_datagram_wait(data)
     }
 
-    /// Receive an unreliable, unordered application datagram
+    /// Receive an unreliable, unordered application datagram.
+    /// Returns `None` if there are no received datagrams waiting to be read.
     pub fn read_datagram(&mut self) -> Option<Bytes> {
         self.connection.read_datagram()
     }
@@ -330,14 +346,14 @@ impl ConnectionItem<'_> {
         self.connection.max_datagram_size()
     }
 
-    /// Bytes available in the outgoing datagram buffer
+    /// Bytes available in the outgoing datagram buffer.
     ///
     /// When greater than zero, sending a datagram of at most this size is guaranteed not to cause older datagrams to be dropped.
     pub fn datagram_send_buffer_space(&mut self) -> usize {
         self.connection.datagram_send_buffer_space()
     }
 
-    /// The peer's UDP address
+    /// The peer's UDP address.
     ///
     /// If [`ServerConfig::migration()`] is `true`, clients may change addresses at will, e.g. when
     /// switching to a cellular internet connection.
@@ -351,27 +367,27 @@ impl ConnectionItem<'_> {
     /// the endpoint is bound to a wildcard address like `0.0.0.0` or `::`.
     ///
     /// This will return `None` for clients, or when the platform does not expose this
-    /// information. See [`quinn_udp::RecvMeta::dst_ip`] for a list of supported platforms
+    /// information. See [`quinn_udp::RecvMeta::dst_ip`] for a list of supported platforms.
     pub fn local_ip(&self) -> Option<IpAddr> {
         self.connection.local_ip()
     }
 
-    /// Current best estimate of this connection's latency (round-trip time)
+    /// Current best estimate of this connection's latency (round-trip time).
     pub fn rtt(&self) -> Duration {
         self.connection.rtt()
     }
 
-    /// Returns connection statistics
+    /// Returns connection statistics.
     pub fn stats(&self) -> ConnectionStats {
         self.connection.stats()
     }
 
-    /// Current state of this connection's congestion control algorithm, for debugging purposes
+    /// Current state of this connection's congestion control algorithm, for debugging purposes.
     pub fn congestion_state(&self) -> &dyn Controller {
         self.connection.congestion_state()
     }
 
-    /// Parameters negotiated during the handshake
+    /// Parameters negotiated during the handshake.
     ///
     /// Guranteed to return `Some` on fully established connections.
     /// The dynamic type returned is determined by the configured [`Session`].
@@ -381,11 +397,11 @@ impl ConnectionItem<'_> {
         self.connection.handshake_data()
     }
 
-    /// Cryptographic identity of the peer
+    /// Cryptographic identity of the peer.
     ///
     /// The dynamic type returned is determined by the configured [`Session`].
     /// For the default `rustls` session, it can be [`downcast`](Box::downcast) to a
-    /// <code>Vec<[rustls::pki_types::CertificateDer]></code>
+    /// <code>Vec<[rustls::pki_types::CertificateDer]></code>.
     pub fn peer_identity(&self) -> Option<Box<dyn Any>> {
         self.connection.peer_identity()
     }
@@ -408,7 +424,7 @@ impl ConnectionItem<'_> {
             .export_keying_material(output, label, context)
     }
 
-    /// Modify the number of remotely initiated unidirectional streams that may be concurrently open
+    /// Modify the number of remotely initiated unidirectional streams that may be concurrently open.
     ///
     /// No streams may be opened by the peer unless fewer than `count` are already open.
     /// Large `count`s increase both minimum and worst-case memory consumption.
@@ -416,7 +432,7 @@ impl ConnectionItem<'_> {
         self.connection.set_max_concurrent_uni_streams(count)
     }
 
-    /// Modify the number of remotely initiated bidirectional streams that may be concurrently open
+    /// Modify the number of remotely initiated bidirectional streams that may be concurrently open.
     ///
     /// No streams may be opened by the peer unless fewer than `count` are already open.
     /// Large `count`s increase both minimum and worst-case memory consumption.
@@ -433,12 +449,13 @@ impl ConnectionReadOnlyItem<'_> {
     /// error such as a time-out or certificate validation failure.
     ///
     /// When the connection becomes closed, a [`ConnectionError`] event is fired, and after a brief timeout,
-    /// the entity is despawned. If the entity has a [`KeepAlive`] component, only the connection component is removed instead
+    /// the connection becomes drained, and the entity is despawned.
+    /// If the entity has a [`KeepAlive`] component, only the connection component is removed instead.
     pub fn is_closed(&self) -> bool {
         self.connection.is_closed()
     }
 
-    /// The peer's UDP address
+    /// The peer's UDP address.
     ///
     /// If [`ServerConfig::migration()`] is `true`, clients may change addresses at will, e.g. when
     /// switching to a cellular internet connection.
@@ -452,27 +469,27 @@ impl ConnectionReadOnlyItem<'_> {
     /// the endpoint is bound to a wildcard address like `0.0.0.0` or `::`.
     ///
     /// This will return `None` for clients, or when the platform does not expose this
-    /// information. See [`quinn_udp::RecvMeta::dst_ip`] for a list of supported platforms
+    /// information. See [`quinn_udp::RecvMeta::dst_ip`] for a list of supported platforms.
     pub fn local_ip(&self) -> Option<IpAddr> {
         self.connection.local_ip()
     }
 
-    /// Current best estimate of this connection's latency (round-trip time)
+    /// Current best estimate of this connection's latency (round-trip time).
     pub fn rtt(&self) -> Duration {
         self.connection.rtt()
     }
 
-    /// Returns connection statistics
+    /// Returns connection statistics.
     pub fn stats(&self) -> ConnectionStats {
         self.connection.stats()
     }
 
-    /// Current state of this connection's congestion control algorithm, for debugging purposes
+    /// Current state of this connection's congestion control algorithm, for debugging purposes.
     pub fn congestion_state(&self) -> &dyn Controller {
         self.connection.congestion_state()
     }
 
-    /// Parameters negotiated during the handshake
+    /// Parameters negotiated during the handshake.
     ///
     /// Guranteed to return `Some` on fully established connections.
     /// The dynamic type returned is determined by the configured [`Session`].
@@ -482,11 +499,11 @@ impl ConnectionReadOnlyItem<'_> {
         self.connection.handshake_data()
     }
 
-    /// Cryptographic identity of the peer
+    /// Cryptographic identity of the peer.
     ///
     /// The dynamic type returned is determined by the configured [`Session`].
     /// For the default `rustls` session, it can be [`downcast`](Box::downcast) to a
-    /// <code>Vec<[rustls::pki_types::CertificateDer]></code>
+    /// <code>Vec<[rustls::pki_types::CertificateDer]></code>.
     pub fn peer_identity(&self) -> Option<Box<dyn Any>> {
         self.connection.peer_identity()
     }
@@ -510,7 +527,7 @@ impl ConnectionReadOnlyItem<'_> {
     }
 }
 
-/// Underlying component type behind the [`Connecting`] and [`Connection`] querydata types
+/// Underlying component type behind the [`Connecting`] and [`Connection`] querydata types.
 #[derive(Debug)]
 pub(crate) struct ConnectionImpl {
     pub(crate) endpoint: Entity,
