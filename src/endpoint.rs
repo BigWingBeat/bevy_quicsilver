@@ -22,7 +22,7 @@ use crate::{
     KeepAlive, KeepAliveEntityCommandsExt,
 };
 
-/// An observer trigger that is fired when an [`Endpoint`] encounters an error
+/// An observer trigger that is fired when an [`Endpoint`] encounters an error.
 #[derive(Debug, Error, Event)]
 pub enum EndpointError {
     /// A connection entity has had its connection component(s) unexpectedly removed
@@ -36,12 +36,12 @@ pub enum EndpointError {
     IoError(std::io::Error),
 }
 
-/// A bundle for adding an [`Endpoint`] to an entity
+/// A bundle for adding an [`Endpoint`] to an entity.
 #[derive(Debug, Bundle)]
 pub struct EndpointBundle(EndpointImpl);
 
 impl EndpointBundle {
-    /// Helper to construct an endpoint for use with outgoing connections, using the default [`EndpointConfig`]
+    /// Helper to construct an endpoint for use with outgoing connections, using the default [`EndpointConfig`].
     ///
     /// Note that `local_addr` is the *local* address to bind to, which should usually be a wildcard
     /// address like `0.0.0.0:0` or `[::]:0`, which allows communication with any reachable IPv4 or
@@ -58,7 +58,7 @@ impl EndpointBundle {
         EndpointImpl::new_client(local_addr, default_client_config).map(Self)
     }
 
-    /// Helper to construct an endpoint for use with incoming connections, using the default [`EndpointConfig`]
+    /// Helper to construct an endpoint for use with incoming connections, using the default [`EndpointConfig`].
     ///
     /// Note that `local_addr` is the *local* address to bind to, which should usually be a wildcard
     /// address like `0.0.0.0` or `[::]` with a well-known, non-zero port number,
@@ -78,7 +78,7 @@ impl EndpointBundle {
         EndpointImpl::new_server(local_addr, server_config).map(Self)
     }
 
-    /// Helper to construct an endpoint for use with both incoming and outgoing connections, using the default [`EndpointConfig`]
+    /// Helper to construct an endpoint for use with both incoming and outgoing connections, using the default [`EndpointConfig`].
     ///
     /// Note that `local_addr` is the *local* address to bind to, which should usually be a wildcard
     /// address like `0.0.0.0` or `[::]` with a well-known, non-zero port number,
@@ -99,7 +99,7 @@ impl EndpointBundle {
         EndpointImpl::new_client_host(local_addr, default_client_config, server_config).map(Self)
     }
 
-    /// Construct an endpoint with the specified socket and configurations
+    /// Construct an endpoint with the specified socket and configurations.
     pub fn new(
         socket: std::net::UdpSocket,
         config: EndpointConfig,
@@ -119,6 +119,7 @@ impl EndpointBundle {
 }
 
 /// A query parameter for a QUIC endpoint.
+/// For available methods when querying entities with this type, see [`EndpointItem`] and [`EndpointReadOnlyItem`].
 ///
 /// An endpoint corresponds to a single UDP socket, may host many connections,
 /// and may act as both client and server for different connections.
@@ -142,12 +143,12 @@ pub struct Endpoint {
 }
 
 impl EndpointItem<'_> {
-    /// Set the default client configuration used by [`Self::connect()`]
+    /// Set the default client configuration used by [`Self::connect()`].
     pub fn set_default_client_config(&mut self, config: ClientConfig) {
         self.endpoint.set_default_client_config(config)
     }
 
-    /// Replace the server configuration, affecting new incoming connections only
+    /// Replace the server configuration, affecting new incoming connections only.
     pub fn set_server_config(&mut self, server_config: Option<ServerConfig>) {
         self.endpoint.set_server_config(server_config)
     }
@@ -211,7 +212,7 @@ impl EndpointItem<'_> {
         self.endpoint.ignore(incoming)
     }
 
-    /// Switch to a new UDP socket
+    /// Switch to a new UDP socket.
     ///
     /// Allows the endpoint’s address to be updated live, affecting all active connections.
     /// Incoming connections and connections to servers unreachable from the new address will be lost.
@@ -222,12 +223,12 @@ impl EndpointItem<'_> {
         self.endpoint.rebind(new_socket)
     }
 
-    /// Get the local `SocketAddr` the underlying socket is bound to
+    /// Get the local `SocketAddr` the underlying socket is bound to.
     pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
         self.endpoint.local_addr()
     }
 
-    /// Get the number of connections that are currently open
+    /// Get the number of connections that are currently open.
     pub fn open_connections(&self) -> usize {
         self.endpoint.open_connections()
     }
@@ -236,7 +237,7 @@ impl EndpointItem<'_> {
         self.endpoint.max_gso_segments()
     }
 
-    /// Send some data over the network
+    /// Send some data over the network.
     pub(crate) fn send(
         &self,
         transmit: &quinn_proto::Transmit,
@@ -247,12 +248,12 @@ impl EndpointItem<'_> {
 }
 
 impl EndpointReadOnlyItem<'_> {
-    /// Get the local `SocketAddr` the underlying socket is bound to
+    /// Get the local `SocketAddr` the underlying socket is bound to.
     pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
         self.endpoint.local_addr()
     }
 
-    /// Get the number of connections that are currently open
+    /// Get the number of connections that are currently open.
     pub fn open_connections(&self) -> usize {
         self.endpoint.open_connections()
     }
@@ -262,7 +263,7 @@ impl EndpointReadOnlyItem<'_> {
         self.endpoint.max_gso_segments()
     }
 
-    /// Send some data over the network
+    /// Send some data over the network.
     #[allow(dead_code)]
     pub(crate) fn send(
         &self,
@@ -273,7 +274,7 @@ impl EndpointReadOnlyItem<'_> {
     }
 }
 
-/// Underlying component type behind the [`EndpointBundle`] bundle and [`Endpoint`] querydata types
+/// Underlying component type behind the [`EndpointBundle`] bundle and [`Endpoint`] querydata types.
 #[derive(Debug, Component)]
 pub(crate) struct EndpointImpl {
     endpoint: quinn_proto::Endpoint,
