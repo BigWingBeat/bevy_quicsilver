@@ -1,4 +1,6 @@
+<div class="rustdoc-hidden">
 # bevy_quicsilver
+</div>
 
 [![crate](https://img.shields.io/crates/v/bevy_quicsilver.svg)](https://crates.io/crates/bevy_quicsilver)
 [![documentation](https://docs.rs/bevy_quicsilver/badge.svg)](https://docs.rs/bevy_quicsilver)

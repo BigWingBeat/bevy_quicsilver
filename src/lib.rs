@@ -1,5 +1,8 @@
-#![doc(test(attr(deny(warnings))))]
+//! <style>
+//! .rustdoc-hidden { display: none; }
+//! </style>
 #![doc = include_str!("../README.md")]
+#![doc(test(attr(deny(warnings))))]
 
 use bevy_ecs::{bundle::Bundle, component::Component, system::EntityCommands};
 
