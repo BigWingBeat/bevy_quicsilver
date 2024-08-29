@@ -46,6 +46,7 @@ pub struct NewIncoming;
 ///
 /// Errors if the specified entity does not exist, or does not have an [`Incoming`] component.
 #[derive(Debug, Clone, Event)]
+#[must_use = "IncomingResponse is an event type and does nothing if not written to an EventWriter"]
 pub struct IncomingResponse {
     entity: Entity,
     response: IncomingResponseType,
@@ -211,8 +212,10 @@ pub(crate) fn handle_incoming_responses(
         let result = incoming_entity.world_scope(|world| {
             let mut endpoint = match endpoints.get_mut(world, endpoint_entity) {
                 Ok(endpoint) => endpoint,
-                Err(QueryEntityError::QueryDoesNotMatch(_)) // If the endpoint does not exist anymore, neither should we
-                | Err(QueryEntityError::NoSuchEntity(_)) => return Ok(None),
+                Err(QueryEntityError::QueryDoesNotMatch(_) | QueryEntityError::NoSuchEntity(_)) => {
+                    // If the endpoint does not exist anymore, neither should we
+                    return Ok(None);
+                }
                 Err(QueryEntityError::AliasedMutability(_)) => unreachable!(),
             };
 
@@ -227,7 +230,7 @@ pub(crate) fn handle_incoming_responses(
                 }
                 IncomingResponseType::Retry => endpoint
                     .retry(incoming)
-                    .map(|_| None)
+                    .map(|()| None)
                     .map_err(|_| IncomingError::RetryError),
                 IncomingResponseType::Ignore => {
                     endpoint.ignore(incoming);
@@ -245,7 +248,7 @@ pub(crate) fn handle_incoming_responses(
                     connection,
                 )));
                 incoming_entity.world_scope(|world| {
-                    world.trigger_targets(ConnectionAccepted, incoming_entity_id)
+                    world.trigger_targets(ConnectionAccepted, incoming_entity_id);
                 });
             }
             // Connection refused, retried or ignored

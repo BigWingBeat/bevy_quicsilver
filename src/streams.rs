@@ -205,7 +205,7 @@ impl From<ReadableError> for RecvError {
 }
 
 /// Hack to automatically call finalize on quinn chunks before dropping them, because otherwise they panic.
-/// finalize consumes self but drop gives you &mut self, so Option::take is needed to make this work.
+/// finalize consumes self but drop gives you &mut self, so `Option::take` is needed to make this work.
 /// This makes writing functions that use chunks way better as you don't need to put calls to finalize everywhere.
 struct Chunks<'a>(Option<quinn_proto::Chunks<'a>>);
 

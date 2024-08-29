@@ -74,6 +74,7 @@ pub struct HandshakeDataReady;
 /// until a [`ConnectionEstablished`] trigger is fired for the entity, after which it can no longer be queried by [`Connecting`],
 /// and must instead be queried with [`Connection`].
 #[derive(Debug, Bundle)]
+#[must_use = "Connections are components and do nothing if not spawned or inserted onto an entity"]
 pub struct ConnectingBundle {
     marker: StillConnecting,
     connection: ConnectionImpl,
@@ -228,7 +229,7 @@ impl ConnectionItem<'_> {
     /// [`finish`]: crate::SendStream::finish
     /// [`SendStream`]: crate::SendStream
     pub fn close(&mut self, error_code: VarInt, reason: Bytes) {
-        self.connection.close(Instant::now(), error_code, reason)
+        self.connection.close(Instant::now(), error_code, reason);
     }
 
     /// Initiate a new outgoing unidirectional stream.
@@ -239,6 +240,7 @@ impl ConnectionItem<'_> {
     /// actually used.
     ///
     /// Returns `None` if outgoing unidirectional streams are currently exhausted.
+    #[must_use = "The stream must be used for the peer to be notified that it has been opened"]
     pub fn open_uni(&mut self) -> Option<SendStream<'_>> {
         self.connection.open_uni()
     }
@@ -256,6 +258,7 @@ impl ConnectionItem<'_> {
     /// [`open_bi()`]: Self::open_bi
     /// [`SendStream`]: crate::SendStream
     /// [`RecvStream`]: crate::RecvStream
+    #[must_use = "The stream must be used for the peer to be notified that it has been opened"]
     pub fn open_bi(&mut self) -> Option<StreamId> {
         self.connection.open_bi()
     }
@@ -429,7 +432,7 @@ impl ConnectionItem<'_> {
     /// No streams may be opened by the peer unless fewer than `count` are already open.
     /// Large `count`s increase both minimum and worst-case memory consumption.
     pub fn set_max_concurrent_uni_streams(&mut self, count: VarInt) {
-        self.connection.set_max_concurrent_uni_streams(count)
+        self.connection.set_max_concurrent_uni_streams(count);
     }
 
     /// Modify the number of remotely initiated bidirectional streams that may be concurrently open.
@@ -437,7 +440,7 @@ impl ConnectionItem<'_> {
     /// No streams may be opened by the peer unless fewer than `count` are already open.
     /// Large `count`s increase both minimum and worst-case memory consumption.
     pub fn set_max_concurrent_bi_streams(&mut self, count: VarInt) {
-        self.connection.set_max_concurrent_bi_streams(count)
+        self.connection.set_max_concurrent_bi_streams(count);
     }
 }
 
@@ -780,8 +783,7 @@ impl ConnectionImpl {
                 if self
                     .timeout_timer
                     .as_ref()
-                    .map(|&(_, previous_timeout)| previous_timeout != timeout)
-                    .unwrap_or(true)
+                    .map_or(true, |&(_, previous_timeout)| previous_timeout != timeout)
                 {
                     self.timeout_timer = Some((
                         Timer::new(
@@ -791,7 +793,7 @@ impl ConnectionImpl {
                             TimerMode::Once,
                         ),
                         timeout,
-                    ))
+                    ));
                 }
             }
             None => self.timeout_timer = None,
@@ -807,7 +809,7 @@ impl ConnectionImpl {
     }
 }
 
-/// Based on https://github.com/quinn-rs/quinn/blob/0.11.1/quinn/src/connection.rs#L231
+/// Based on <https://github.com/quinn-rs/quinn/blob/0.11.1/quinn/src/connection.rs#L231>
 pub(crate) fn poll_connections(
     mut commands: Commands,
     mut query: Query<(
@@ -820,7 +822,7 @@ pub(crate) fn poll_connections(
     time: Res<Time<Real>>,
 ) {
     let now = Instant::now();
-    for (entity, mut connection, established, keepalive) in query.iter_mut() {
+    for (entity, mut connection, established, keepalive) in &mut query {
         let Some(mut endpoint) = ({
             if connection.is_drained() {
                 commands.trigger_targets(ConnectionDrained, entity);
@@ -835,8 +837,9 @@ pub(crate) fn poll_connections(
                             .contains_key(&connection.handle)
                             .then_some(endpoint)
                     }
-                    Err(QueryEntityError::QueryDoesNotMatch(_))
-                    | Err(QueryEntityError::NoSuchEntity(_)) => {
+                    Err(
+                        QueryEntityError::QueryDoesNotMatch(_) | QueryEntityError::NoSuchEntity(_),
+                    ) => {
                         // If the endpoint does not exist anymore, neither should we
                         None
                     }
@@ -924,14 +927,9 @@ pub(crate) fn poll_connections(
                             commands.trigger_targets(ConnectingError::Lost(reason), entity);
                         }
                     }
-                    Event::Stream(StreamEvent::Opened { .. }) => {}
-                    Event::Stream(StreamEvent::Readable { .. }) => {}
                     Event::Stream(StreamEvent::Writable { id }) => streams_to_flush.push(id),
-                    Event::Stream(StreamEvent::Finished { .. }) => {}
-                    Event::Stream(StreamEvent::Stopped { .. }) => {}
-                    Event::Stream(StreamEvent::Available { .. }) => {}
-                    Event::DatagramReceived => {}
                     Event::DatagramsUnblocked => connection.flush_pending_datagrams(),
+                    _ => {}
                 }
             }
 

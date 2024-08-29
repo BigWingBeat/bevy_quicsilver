@@ -38,6 +38,7 @@ pub enum EndpointError {
 
 /// A bundle for adding an [`Endpoint`] to an entity.
 #[derive(Debug, Bundle)]
+#[must_use = "Endpoints are components and do nothing if not spawned or inserted onto an entity"]
 pub struct EndpointBundle(EndpointImpl);
 
 impl EndpointBundle {
@@ -145,12 +146,12 @@ pub struct Endpoint {
 impl EndpointItem<'_> {
     /// Set the default client configuration used by [`Self::connect()`].
     pub fn set_default_client_config(&mut self, config: ClientConfig) {
-        self.endpoint.set_default_client_config(config)
+        self.endpoint.set_default_client_config(config);
     }
 
     /// Replace the server configuration, affecting new incoming connections only.
     pub fn set_server_config(&mut self, server_config: Option<ServerConfig>) {
-        self.endpoint.set_server_config(server_config)
+        self.endpoint.set_server_config(server_config);
     }
 
     pub(crate) fn handle_event(
@@ -166,7 +167,6 @@ impl EndpointItem<'_> {
     ///
     /// The exact value of the `server_name` parameter must be included in the `subject_alt_names` field of the server's certificate,
     /// as described by [`rcgen::generate_simple_self_signed`].
-    #[must_use = "Connections are components and do nothing if not spawned or inserted onto an entity"]
     pub fn connect(
         &mut self,
         server_address: SocketAddr,
@@ -181,7 +181,6 @@ impl EndpointItem<'_> {
     ///
     /// The exact value of the `server_name` parameter must be included in the `subject_alt_names` field of the server's certificate,
     /// as described by [`rcgen::generate_simple_self_signed`].
-    #[must_use = "Connections are components and do nothing if not spawned or inserted onto an entity"]
     pub fn connect_with(
         &mut self,
         server_address: SocketAddr,
@@ -201,7 +200,7 @@ impl EndpointItem<'_> {
     }
 
     pub(crate) fn refuse(&mut self, incoming: quinn_proto::Incoming) {
-        self.endpoint.refuse(incoming)
+        self.endpoint.refuse(incoming);
     }
 
     pub(crate) fn retry(&mut self, incoming: quinn_proto::Incoming) -> Result<(), RetryError> {
@@ -209,7 +208,7 @@ impl EndpointItem<'_> {
     }
 
     pub(crate) fn ignore(&mut self, incoming: quinn_proto::Incoming) {
-        self.endpoint.ignore(incoming)
+        self.endpoint.ignore(incoming);
     }
 
     /// Switch to a new UDP socket.
@@ -420,11 +419,11 @@ impl EndpointImpl {
     }
 
     fn ignore(&mut self, incoming: quinn_proto::Incoming) {
-        self.endpoint.ignore(incoming)
+        self.endpoint.ignore(incoming);
     }
 
     /// Internal method for endpoint-generated data, which can safely ignore the Result
-    /// See https://github.com/quinn-rs/quinn/blob/0.11.1/quinn/src/endpoint.rs#L504
+    /// See <https://github.com/quinn-rs/quinn/blob/0.11.1/quinn/src/endpoint.rs#L504>
     fn send_response(&self, transmit: &quinn_proto::Transmit, buffer: &[u8]) {
         let _ = self.send(transmit, buffer);
     }
@@ -442,7 +441,7 @@ impl EndpointImpl {
     }
 
     fn set_server_config(&mut self, server_config: Option<ServerConfig>) {
-        self.endpoint.set_server_config(server_config.map(Arc::new))
+        self.endpoint.set_server_config(server_config.map(Arc::new));
     }
 
     fn rebind(&mut self, _new_socket: std::net::UdpSocket) -> std::io::Result<()> {
@@ -474,7 +473,7 @@ pub(crate) fn poll_endpoints(
             endpoint: mut endpoint_impl,
         },
         keepalive,
-    ) in endpoint_query.iter_mut()
+    ) in &mut endpoint_query
     {
         let EndpointImpl {
             endpoint,
