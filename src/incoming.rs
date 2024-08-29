@@ -114,15 +114,9 @@ impl IncomingResponse {
 ///
 /// # Usage
 /// ```
-/// # use bevy_app::App;
 /// # use bevy_ecs::prelude::{Query, EventWriter, Trigger};
-/// # use bevy_quicsilver::{QuicPlugin, Incoming, NewIncoming, IncomingResponse};
-///
-/// # let mut app = App::new();
-/// # app.add_plugins(QuicPlugin);
-/// # app.observe(my_observer);
-/// # app.update();
-///
+/// # use bevy_ecs::system::assert_is_system;
+/// # use bevy_quicsilver::{Incoming, NewIncoming, IncomingResponse};
 /// fn my_observer(
 ///     trigger: Trigger<NewIncoming>,
 ///     query: Query<&Incoming>,
@@ -131,12 +125,13 @@ impl IncomingResponse {
 ///     let entity = trigger.entity();
 ///     let incoming = query.get(entity).unwrap();
 ///     if incoming.remote_address_validated() {
-///         println!("New client connecting from {:?}", incoming.remote_address());
+///         println!("New client connecting from {}", incoming.remote_address());
 ///         responses.send(IncomingResponse::accept(entity));
 ///     } else {
 ///         responses.send(IncomingResponse::retry(entity));
 ///     }
 /// }
+/// # assert_is_system(my_observer);
 /// ```
 #[derive(Debug)]
 pub struct Incoming {

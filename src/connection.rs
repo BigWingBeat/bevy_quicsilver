@@ -109,13 +109,14 @@ impl Component for StillConnecting {
 ///
 /// # Usage
 /// ```
-/// # use bevy_ecs::Query;
+/// # use bevy_ecs::system::{Query, assert_is_system};
 /// # use bevy_quicsilver::Connecting;
 /// fn my_system(query: Query<Connecting>) {
 ///     for connection in query.iter() {
 ///         println!("{}", connection.remote_address());
 ///     }
 /// }
+/// # assert_is_system(my_system);
 /// ```
 #[derive(Debug, QueryData)]
 pub struct Connecting {

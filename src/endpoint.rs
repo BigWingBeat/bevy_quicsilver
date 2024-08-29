@@ -125,20 +125,14 @@ impl EndpointBundle {
 ///
 /// # Usage
 /// ```
-/// # use bevy_app::{App, Update};
-/// # use bevy_ecs::prelude::Query;
-/// # use bevy_quicsilver::{QuicPlugin, Endpoint};
-/// #
-/// # let mut app = App::new();
-/// # app.add_plugins(QuicPlugin);
-/// # app.add_systems(Update, my_system);
-/// # app.update();
-/// #
+/// # use bevy_ecs::system::{Query, assert_is_system};
+/// # use bevy_quicsilver::Endpoint;
 /// fn my_system(query: Query<Endpoint>) {
 ///     for endpoint in query.iter() {
 ///         println!("{}", endpoint.open_connections());
 ///     }
 /// }
+/// # assert_is_system(my_system);
 /// ```
 #[derive(QueryData)]
 #[query_data(mutable)]
