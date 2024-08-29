@@ -11,12 +11,8 @@ use bevy_ecs::{
     system::{Commands, Query, Res, ResMut, Resource},
 };
 use bevy_quicsilver::{
-    connection::{
-        ConnectingError, Connection, ConnectionDrained, ConnectionError, ConnectionEstablished,
-    },
-    endpoint::EndpointBundle,
-    streams::RecvError,
-    Endpoint, QuicPlugin,
+    ConnectingError, Connection, ConnectionDrained, ConnectionError, ConnectionEstablished,
+    Endpoint, EndpointBundle, QuicPlugin, RecvError,
 };
 use bevy_state::{
     app::{AppExtStates, StatesPlugin},

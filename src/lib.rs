@@ -5,17 +5,30 @@ use bevy_ecs::{bundle::Bundle, component::Component, system::EntityCommands};
 
 pub use quinn_proto::{ClientConfig, ServerConfig};
 
-pub use endpoint::Endpoint;
-pub use incoming::{Incoming, IncomingResponse, NewIncoming};
+pub use connection::{
+    Connecting, ConnectingBundle, ConnectingError, Connection, ConnectionAccepted,
+    ConnectionDrained, ConnectionError, ConnectionEstablished,
+};
+pub use endpoint::{Endpoint, EndpointBundle, EndpointError};
+pub use incoming::{Incoming, IncomingError, IncomingResponse, NewIncoming};
 pub use plugin::QuicPlugin;
+pub use streams::{RecvError, RecvStream, SendStream};
 
-pub mod connection;
+mod connection;
 pub mod crypto;
-pub mod endpoint;
-pub mod incoming;
+mod endpoint;
+mod incoming;
 mod plugin;
 mod socket;
-pub mod streams;
+mod streams;
+
+/// Automatically generated types for ECS queries
+pub mod query {
+    pub use crate::connection::{
+        ConnectingItem, ConnectionItem, ConnectionReadOnly, ConnectionReadOnlyItem,
+    };
+    pub use crate::endpoint::{EndpointItem, EndpointReadOnly, EndpointReadOnlyItem};
+}
 
 /// If this component is placed on an entity, it will never be automatically despawned by this library.
 /// For example, closing a connection normally results in the entity being despawned, but if this component
@@ -37,7 +50,7 @@ impl KeepAliveEntityCommandsExt for EntityCommands<'_> {
     }
 }
 
-/// Helper functions for tests located in specific modules
+/// Helper functions for tests
 #[cfg(test)]
 mod tests {
     use std::{any::TypeId, error::Error, net::Ipv6Addr, sync::Arc};

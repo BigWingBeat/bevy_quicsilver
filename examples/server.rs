@@ -12,9 +12,8 @@ use bevy_ecs::{
     system::{Commands, Query},
 };
 use bevy_quicsilver::{
-    connection::{Connecting, ConnectingError, Connection, ConnectionError, ConnectionEstablished},
-    endpoint::EndpointBundle,
-    Incoming, IncomingResponse, NewIncoming, QuicPlugin,
+    Connecting, ConnectingError, Connection, ConnectionError, ConnectionEstablished,
+    EndpointBundle, Incoming, IncomingResponse, NewIncoming, QuicPlugin,
 };
 use quinn_proto::{ServerConfig, StreamId};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
