@@ -1,8 +1,11 @@
 use std::sync::Arc;
 
-use quinn_proto::crypto::rustls::{NoInitialCipherSuite, QuicClientConfig, QuicServerConfig};
+use quinn_proto::crypto::rustls::{QuicClientConfig, QuicServerConfig};
 
-pub use quinn_proto::crypto::{ClientConfig, ServerConfig};
+pub use quinn_proto::crypto::{
+    rustls::NoInitialCipherSuite, ClientConfig, ExportKeyingMaterialError, HandshakeTokenKey,
+    HmacKey, ServerConfig,
+};
 
 pub trait CryptoConfigExt: Sized {
     type RustlsConfig;

@@ -3,24 +3,34 @@
 
 use bevy_ecs::{bundle::Bundle, component::Component, system::EntityCommands};
 
-pub use quinn_proto::{ClientConfig, ServerConfig, StreamId, VarInt};
+pub use quinn_proto as proto;
+pub use quinn_proto::{
+    ApplicationClose, ClientConfig, ClosedStream, ConnectError,
+    ConnectionError as ConnectionLostError, EndpointConfig, FinishError, SendDatagramError,
+    ServerConfig, StreamId, VarInt, VarIntBoundsExceeded, WriteError, Written,
+};
 
+mod connection;
 pub use connection::{
     Connecting, ConnectingBundle, ConnectingError, Connection, ConnectionAccepted,
     ConnectionDrained, ConnectionError, ConnectionEstablished,
 };
-pub use endpoint::{Endpoint, EndpointBundle, EndpointError};
-pub use incoming::{Incoming, IncomingError, IncomingResponse, NewIncoming};
-pub use plugin::QuicPlugin;
-pub use streams::{RecvError, RecvStream, SendStream};
 
-mod connection;
 pub mod crypto;
+
 mod endpoint;
+pub use endpoint::{Endpoint, EndpointBundle, EndpointError};
+
 mod incoming;
+pub use incoming::{Incoming, IncomingError, IncomingResponse, NewIncoming};
+
 mod plugin;
+pub use plugin::QuicPlugin;
+
 mod socket;
+
 mod streams;
+pub use streams::{RecvError, RecvStream, SendStream};
 
 /// Automatically generated types for ECS queries.
 pub mod query {
