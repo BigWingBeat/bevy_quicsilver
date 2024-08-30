@@ -50,15 +50,15 @@ pub mod query {
 pub struct KeepAlive;
 
 trait KeepAliveEntityCommandsExt {
-    fn remove_or_despawn<B: Bundle>(&mut self, keepalive: bool);
+    fn remove_or_despawn<B: Bundle>(self, keepalive: bool) -> Self;
 }
 
 impl KeepAliveEntityCommandsExt for EntityCommands<'_> {
-    fn remove_or_despawn<B: Bundle>(&mut self, keepalive: bool) {
+    fn remove_or_despawn<B: Bundle>(self, keepalive: bool) -> Self {
         if keepalive {
-            self.remove::<B>();
+            self.remove::<B>()
         } else {
-            self.despawn();
+            self.despawn()
         }
     }
 }
