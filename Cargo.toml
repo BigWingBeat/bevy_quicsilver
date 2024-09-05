@@ -10,9 +10,9 @@ keywords = ["bevy", "quic", "gamedev", "networking"]
 categories = ["game-development", "network-programming"]
 
 [dependencies]
-bevy_app = { git = "https://github.com/BigWingBeat/bevy", branch = "main", default-features = false }
-bevy_ecs = { git = "https://github.com/BigWingBeat/bevy", branch = "main", default-features = false }
-bevy_time = { git = "https://github.com/BigWingBeat/bevy", branch = "main", default-features = false }
+bevy_app = { git = "https://github.com/BigWingBeat/bevy", branch = "ui_compile_error", default-features = false }
+bevy_ecs = { git = "https://github.com/BigWingBeat/bevy", branch = "ui_compile_error", default-features = false }
+bevy_time = { git = "https://github.com/BigWingBeat/bevy", branch = "ui_compile_error", default-features = false }
 hashbrown = "0.14"
 bytes = "1.6"
 thiserror = "1.0"
@@ -21,23 +21,30 @@ quinn-udp = { version = "0.5", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["logging", "std"] }
 rcgen = { version = "0.13", default-features = false, features = ["crypto", "ring"] }
 
-[dev-dependencies]
-directories = "5.0"
-
-# For client & server examples
-bevy_state = { git = "https://github.com/BigWingBeat/bevy", branch = "main", default-features = false, features = ["bevy_app"] }
-
-# For powder toy example
-bevy = { git = "https://github.com/BigWingBeat/bevy", branch = "main", default-features = false, features = [
-	"bevy_winit",
-	"x11",
-	"bevy_ui",
-] }
-bevy_simple_text_input = { git = "https://github.com/rparrett/bevy_simple_text_input", branch = "bevy_main" }
-
 [features]
 default = ["platform-verifier"]
 platform-verifier = ["quinn-proto/platform-verifier"]
 
+[dev-dependencies]
+directories = "5.0"
+
+# For client & server examples
+bevy_state = { git = "https://github.com/BigWingBeat/bevy", branch = "ui_compile_error", default-features = false, features = [
+	"bevy_app",
+] }
+
+# For powder toy example
+bevy = { git = "https://github.com/BigWingBeat/bevy", branch = "ui_compile_error", default-features = false, features = [
+	"x11",
+	"bevy_winit",
+	"bevy_ui",
+	"default_font",
+] }
+bevy_simple_text_input = { git = "https://github.com/rparrett/bevy_simple_text_input", branch = "bevy_main" }
+
 [patch."https://github.com/bevyengine/bevy"]
-bevy = { git = "https://github.com/BigWingBeat/bevy", branch = "main" }
+bevy = { git = "https://github.com/BigWingBeat/bevy", branch = "ui_compile_error" }
+# bevy = { path = "../bevy" }
+
+# [patch."https://github.com/BigWingBeat/bevy"]
+# bevy = { path = "../bevy" }
