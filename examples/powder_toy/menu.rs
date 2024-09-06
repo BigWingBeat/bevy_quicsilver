@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use bevy::{
     color::palettes::tailwind::*, ecs::system::IntoObserverSystem, prelude::*, ui::FocusPolicy,
 };
@@ -8,6 +10,7 @@ use bevy_simple_text_input::{
 const WINDOW_BACKGROUND: ClearColor = ClearColor(Color::Srgba(ZINC_700));
 const BUTTON_BACKGROUND: Color = Color::Srgba(ZINC_800);
 const TEXT_COLOR: Color = Color::Srgba(ZINC_50);
+const TITLE_TEXT_SIZE: f32 = 80.0;
 
 pub struct MenuPlugin;
 
@@ -21,6 +24,15 @@ impl Plugin for MenuPlugin {
 
 #[derive(Event)]
 struct ButtonPress;
+
+#[derive(Resource, Deref)]
+pub struct TitleRoot(pub Entity);
+
+#[derive(Resource, Deref)]
+pub struct HostRoot(pub Entity);
+
+#[derive(Resource, Deref)]
+pub struct JoinRoot(pub Entity);
 
 /// Spawn the menus
 pub fn spawn_menus(world: &mut World) {
@@ -36,70 +48,22 @@ pub fn spawn_menus(world: &mut World) {
 /// - Join game button
 /// - Quit game button
 fn spawn_title(world: &mut World) {
-    world
-        .spawn((
-            NodeBundle {
-                style: Style {
-                    width: Val::Percent(100.0),
-                    height: Val::Percent(100.0),
-                    flex_direction: FlexDirection::Column,
-                    align_items: AlignItems::Center,
-                    justify_content: JustifyContent::SpaceAround,
-                    ..default()
-                },
-                ..default()
-            },
-            Interaction::None,
-        ))
+    let id = spawn_root(world, Display::Flex)
         .with_children(|parent| {
-            parent.spawn(
-                TextBundle::from_section(
-                    "Powder Toy Example",
-                    TextStyle {
-                        font_size: 80.0,
-                        color: TEXT_COLOR,
-                        ..default()
-                    },
-                )
-                .with_text_justify(JustifyText::Center),
-            );
-
-            parent.spawn((
-                NodeBundle {
-                    style: Style {
-                        width: Val::Px(500.0),
-                        padding: UiRect::axes(Val::Percent(0.9), Val::Percent(0.25)),
-                        ..default()
-                    },
-                    focus_policy: FocusPolicy::Block,
-                    border_radius: BorderRadius::MAX,
-                    border_color: BUTTON_BACKGROUND.into(),
-                    background_color: BUTTON_BACKGROUND.into(),
-                    ..default()
-                },
-                TextInput,
-                TextInputTextStyle(TextStyle {
-                    font_size: 40.0,
-                    color: TEXT_COLOR,
-                    ..default()
-                }),
-                TextInputPlaceholder {
-                    value: "Enter Username...".into(),
-                    text_style: None,
-                },
-                TextInputInactive(true),
-            ));
-
-            spawn_button(parent, "Host Game", |_: Trigger<ButtonPress>| {});
-            spawn_button(parent, "Join Game", |_: Trigger<ButtonPress>| {});
+            spawn_text(parent, "Powder Toy Example", TITLE_TEXT_SIZE);
+            spawn_textbox(parent, "Enter Username...");
+            spawn_button(parent, "Host Game", switch_menu::<TitleRoot, HostRoot>);
+            spawn_button(parent, "Join Game", switch_menu::<TitleRoot, JoinRoot>);
             spawn_button(
                 parent,
                 "Quit Game",
-                |_: Trigger<ButtonPress>, mut e: EventWriter<AppExit>| {
+                |_: Trigger<_>, mut e: EventWriter<AppExit>| {
                     e.send(AppExit::Success);
                 },
             );
-        });
+        })
+        .id();
+    world.insert_resource(TitleRoot(id));
 }
 
 /// Spawn the 'host a game' menu:
@@ -109,14 +73,111 @@ fn spawn_title(world: &mut World) {
 ///     - Edit permission whitelist or blacklist
 /// - Start server button
 /// - Back to title button
-fn spawn_host(world: &mut World) {}
+fn spawn_host(world: &mut World) {
+    let id = spawn_root(world, Display::None)
+        .with_children(|parent| {
+            spawn_text(parent, "Host a game", TITLE_TEXT_SIZE);
+            spawn_textbox(parent, "Server Password...");
+
+            parent
+                .spawn(NodeBundle {
+                    style: Style {
+                        column_gap: Val::Px(50.0),
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::SpaceAround,
+                        ..default()
+                    },
+                    ..default()
+                })
+                .with_children(|parent| {
+                    spawn_text(parent, "Edit permissions:", 40.0);
+                    spawn_button(parent, "Whitelist", |_: Trigger<_>| {});
+                    spawn_button(parent, "Blacklist", |_: Trigger<_>| {});
+                });
+
+            spawn_button(parent, "Start Server", |_: Trigger<_>| {});
+            spawn_button(parent, "Back", switch_menu::<HostRoot, TitleRoot>);
+        })
+        .id();
+    world.insert_resource(HostRoot(id));
+}
 
 /// Spawn the 'join a game' menu:
 /// - Title text
 /// - Server input
 /// - Join button
 /// - Back to title button
-fn spawn_join(world: &mut World) {}
+fn spawn_join(world: &mut World) {
+    let id = spawn_root(world, Display::None)
+        .with_children(|parent| {
+            spawn_text(parent, "Join a game", TITLE_TEXT_SIZE);
+            spawn_textbox(parent, "Enter Server IP...");
+            spawn_button(parent, "Join Server", |_: Trigger<_>| {});
+            spawn_button(parent, "Back", switch_menu::<JoinRoot, TitleRoot>);
+        })
+        .id();
+    world.insert_resource(JoinRoot(id));
+}
+
+fn spawn_root(world: &mut World, display: Display) -> EntityWorldMut {
+    world.spawn((
+        NodeBundle {
+            style: Style {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::SpaceAround,
+                display,
+                ..default()
+            },
+            ..default()
+        },
+        Interaction::None,
+    ))
+}
+
+fn spawn_textbox(parent: &mut WorldChildBuilder, placeholder: impl Into<String>) {
+    parent.spawn((
+        NodeBundle {
+            style: Style {
+                width: Val::Px(500.0),
+                padding: UiRect::axes(Val::Percent(0.9), Val::Percent(0.25)),
+                ..default()
+            },
+            focus_policy: FocusPolicy::Block,
+            border_radius: BorderRadius::MAX,
+            border_color: BUTTON_BACKGROUND.into(),
+            background_color: BUTTON_BACKGROUND.into(),
+            ..default()
+        },
+        TextInput,
+        TextInputTextStyle(TextStyle {
+            font_size: 40.0,
+            color: TEXT_COLOR,
+            ..default()
+        }),
+        TextInputPlaceholder {
+            value: placeholder.into(),
+            text_style: None,
+        },
+        TextInputInactive(true),
+    ));
+}
+
+fn spawn_text(parent: &mut WorldChildBuilder, text: impl Into<String>, font_size: f32) {
+    parent.spawn(
+        TextBundle::from_section(
+            text,
+            TextStyle {
+                font_size,
+                color: TEXT_COLOR,
+                ..default()
+            },
+        )
+        .with_text_justify(JustifyText::Center),
+    );
+}
 
 fn spawn_button<B: Bundle, M>(
     parent: &mut WorldChildBuilder,
@@ -147,6 +208,17 @@ fn spawn_button<B: Bundle, M>(
         .observe(on_press);
 }
 
+fn switch_menu<F: Deref<Target = Entity> + Resource, T: Deref<Target = Entity> + Resource>(
+    _: Trigger<ButtonPress>,
+    mut style: Query<&mut Style>,
+    from: Res<F>,
+    to: Res<T>,
+) {
+    style.get_mut(**from).unwrap().display = Display::None;
+    style.get_mut(**to).unwrap().display = Display::Flex;
+}
+
+#[allow(clippy::type_complexity)]
 fn button(
     mut commands: Commands,
     query: Query<(Entity, &Interaction), (Changed<Interaction>, With<Button>)>,
