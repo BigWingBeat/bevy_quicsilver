@@ -4,8 +4,10 @@ use bevy::{
     color::palettes::tailwind::*, ecs::system::IntoObserverSystem, prelude::*, ui::FocusPolicy,
 };
 use bevy_simple_text_input::{
-    TextInput, TextInputInactive, TextInputPlaceholder, TextInputTextStyle,
+    TextInput, TextInputInactive, TextInputPlaceholder, TextInputPlugin, TextInputTextStyle,
 };
+
+use crate::{client::start_client, server::start_server};
 
 const WINDOW_BACKGROUND: ClearColor = ClearColor(Color::Srgba(ZINC_700));
 const BUTTON_BACKGROUND: Color = Color::Srgba(ZINC_800);
@@ -16,7 +18,8 @@ pub struct MenuPlugin;
 
 impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(WINDOW_BACKGROUND)
+        app.add_plugins(TextInputPlugin)
+            .insert_resource(WINDOW_BACKGROUND)
             .add_systems(Startup, spawn_menus)
             .add_systems(Update, (focus, button));
     }
@@ -34,11 +37,15 @@ pub struct HostRoot(pub Entity);
 #[derive(Resource, Deref)]
 pub struct JoinRoot(pub Entity);
 
+#[derive(Resource, Deref)]
+pub struct GameRoot(pub Entity);
+
 /// Spawn the menus
 pub fn spawn_menus(world: &mut World) {
     spawn_title(world);
     spawn_host(world);
     spawn_join(world);
+    spawn_game(world);
 }
 
 /// Spawn the title screen:
@@ -50,7 +57,7 @@ pub fn spawn_menus(world: &mut World) {
 fn spawn_title(world: &mut World) {
     let id = spawn_root(world, Display::Flex)
         .with_children(|parent| {
-            spawn_text(parent, "Powder Toy Example", TITLE_TEXT_SIZE);
+            spawn_text(parent, "Digger Demo Example", TITLE_TEXT_SIZE);
             spawn_textbox(parent, "Enter Username...");
             spawn_button(parent, "Host Game", switch_menu::<TitleRoot, HostRoot>);
             spawn_button(parent, "Join Game", switch_menu::<TitleRoot, JoinRoot>);
@@ -95,7 +102,8 @@ fn spawn_host(world: &mut World) {
                     spawn_button(parent, "Blacklist", |_: Trigger<_>| {});
                 });
 
-            spawn_button(parent, "Start Server", |_: Trigger<_>| {});
+            spawn_button(parent, "Start Server", switch_menu::<HostRoot, GameRoot>)
+                .observe(start_server::<ButtonPress>);
             spawn_button(parent, "Back", switch_menu::<HostRoot, TitleRoot>);
         })
         .id();
@@ -112,11 +120,19 @@ fn spawn_join(world: &mut World) {
         .with_children(|parent| {
             spawn_text(parent, "Join a game", TITLE_TEXT_SIZE);
             spawn_textbox(parent, "Enter Server IP...");
-            spawn_button(parent, "Join Server", |_: Trigger<_>| {});
+            spawn_button(parent, "Join Server", switch_menu::<JoinRoot, GameRoot>)
+                .observe(start_client::<ButtonPress>);
             spawn_button(parent, "Back", switch_menu::<JoinRoot, TitleRoot>);
         })
         .id();
     world.insert_resource(JoinRoot(id));
+}
+
+/// Spawn the in-game GUI:
+/// - Nothing for now
+fn spawn_game(world: &mut World) {
+    let id = spawn_root(world, Display::None).id();
+    world.insert_resource(GameRoot(id));
 }
 
 fn spawn_root(world: &mut World, display: Display) -> EntityWorldMut {
@@ -179,33 +195,33 @@ fn spawn_text(parent: &mut WorldChildBuilder, text: impl Into<String>, font_size
     );
 }
 
-fn spawn_button<B: Bundle, M>(
-    parent: &mut WorldChildBuilder,
+fn spawn_button<'a, B: Bundle, M>(
+    parent: &'a mut WorldChildBuilder<'_>,
     text: impl Into<String>,
     on_press: impl IntoObserverSystem<ButtonPress, B, M>,
-) {
-    parent
-        .spawn(ButtonBundle {
-            style: Style {
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                padding: UiRect::axes(Val::Percent(0.9), Val::Percent(0.25)),
-                ..default()
-            },
-            border_radius: BorderRadius::MAX,
-            border_color: BUTTON_BACKGROUND.into(),
-            background_color: BUTTON_BACKGROUND.into(),
+) -> EntityWorldMut<'a> {
+    let mut e = parent.spawn(ButtonBundle {
+        style: Style {
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            padding: UiRect::axes(Val::Percent(0.9), Val::Percent(0.25)),
             ..default()
-        })
-        .with_child(TextBundle::from_section(
-            text,
-            TextStyle {
-                font_size: 40.0,
-                color: TEXT_COLOR,
-                ..default()
-            },
-        ))
-        .observe(on_press);
+        },
+        border_radius: BorderRadius::MAX,
+        border_color: BUTTON_BACKGROUND.into(),
+        background_color: BUTTON_BACKGROUND.into(),
+        ..default()
+    });
+    e.with_child(TextBundle::from_section(
+        text,
+        TextStyle {
+            font_size: 40.0,
+            color: TEXT_COLOR,
+            ..default()
+        },
+    ))
+    .observe(on_press);
+    e
 }
 
 fn switch_menu<F: Deref<Target = Entity> + Resource, T: Deref<Target = Entity> + Resource>(
