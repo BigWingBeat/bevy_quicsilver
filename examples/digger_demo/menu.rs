@@ -5,9 +5,15 @@ use bevy::{
 };
 use bevy_simple_text_input::{
     TextInput, TextInputInactive, TextInputPlaceholder, TextInputPlugin, TextInputTextStyle,
+    TextInputValue,
 };
+use bevy_state::state::NextState;
 
-use crate::{client::start_client, server::start_server};
+use crate::{
+    client::ServerAddress,
+    server::{EditPermissionMode, ServerPassword},
+    AppState, Username,
+};
 
 const WINDOW_BACKGROUND: ClearColor = ClearColor(Color::Srgba(ZINC_700));
 const BUTTON_BACKGROUND: Color = Color::Srgba(ZINC_800);
@@ -21,12 +27,15 @@ impl Plugin for MenuPlugin {
         app.add_plugins(TextInputPlugin)
             .insert_resource(WINDOW_BACKGROUND)
             .add_systems(Startup, spawn_menus)
-            .add_systems(Update, (focus, button));
+            .add_systems(Update, (button, textinput_focus, textinput_change));
     }
 }
 
 #[derive(Event)]
 struct ButtonPress;
+
+#[derive(Event)]
+struct TextInputChanged(String);
 
 #[derive(Resource, Deref)]
 pub struct TitleRoot(pub Entity);
@@ -39,6 +48,8 @@ pub struct JoinRoot(pub Entity);
 
 #[derive(Resource, Deref)]
 pub struct GameRoot(pub Entity);
+
+/* Startup systems */
 
 /// Spawn the menus
 pub fn spawn_menus(world: &mut World) {
@@ -58,7 +69,7 @@ fn spawn_title(world: &mut World) {
     let id = spawn_root(world, Display::Flex)
         .with_children(|parent| {
             spawn_text(parent, "Digger Demo Example", TITLE_TEXT_SIZE);
-            spawn_textbox(parent, "Enter Username...");
+            spawn_textbox(parent, "Enter Username...", copy_to_resource::<Username>);
             spawn_button(parent, "Host Game", switch_menu::<TitleRoot, HostRoot>);
             spawn_button(parent, "Join Game", switch_menu::<TitleRoot, JoinRoot>);
             spawn_button(
@@ -84,7 +95,11 @@ fn spawn_host(world: &mut World) {
     let id = spawn_root(world, Display::None)
         .with_children(|parent| {
             spawn_text(parent, "Host a game", TITLE_TEXT_SIZE);
-            spawn_textbox(parent, "Server Password...");
+            spawn_textbox(
+                parent,
+                "Server Password...",
+                copy_to_resource::<ServerPassword>,
+            );
 
             parent
                 .spawn(NodeBundle {
@@ -98,12 +113,27 @@ fn spawn_host(world: &mut World) {
                 })
                 .with_children(|parent| {
                     spawn_text(parent, "Edit permissions:", 40.0);
-                    spawn_button(parent, "Whitelist", |_: Trigger<_>| {});
-                    spawn_button(parent, "Blacklist", |_: Trigger<_>| {});
+                    spawn_button(
+                        parent,
+                        "Whitelist",
+                        |_: Trigger<_>, mut mode: ResMut<EditPermissionMode>| {
+                            *mode = EditPermissionMode::Whitelist;
+                        },
+                    );
+                    spawn_button(
+                        parent,
+                        "Blacklist",
+                        |_: Trigger<_>, mut mode: ResMut<EditPermissionMode>| {
+                            *mode = EditPermissionMode::Blacklist;
+                        },
+                    );
                 });
 
-            spawn_button(parent, "Start Server", switch_menu::<HostRoot, GameRoot>)
-                .observe(start_server::<ButtonPress>);
+            spawn_button(parent, "Start Server", switch_menu::<HostRoot, GameRoot>).observe(
+                |_: Trigger<ButtonPress>, mut state: ResMut<NextState<AppState>>| {
+                    state.set(AppState::Server)
+                },
+            );
             spawn_button(parent, "Back", switch_menu::<HostRoot, TitleRoot>);
         })
         .id();
@@ -119,9 +149,16 @@ fn spawn_join(world: &mut World) {
     let id = spawn_root(world, Display::None)
         .with_children(|parent| {
             spawn_text(parent, "Join a game", TITLE_TEXT_SIZE);
-            spawn_textbox(parent, "Enter Server IP...");
-            spawn_button(parent, "Join Server", switch_menu::<JoinRoot, GameRoot>)
-                .observe(start_client::<ButtonPress>);
+            spawn_textbox(
+                parent,
+                "Enter Server Address...",
+                copy_to_resource::<ServerAddress>,
+            );
+            spawn_button(parent, "Join Server", switch_menu::<JoinRoot, GameRoot>).observe(
+                |_: Trigger<ButtonPress>, mut state: ResMut<NextState<AppState>>| {
+                    state.set(AppState::Client)
+                },
+            );
             spawn_button(parent, "Back", switch_menu::<JoinRoot, TitleRoot>);
         })
         .id();
@@ -134,6 +171,8 @@ fn spawn_game(world: &mut World) {
     let id = spawn_root(world, Display::None).id();
     world.insert_resource(GameRoot(id));
 }
+
+/* Helper functions */
 
 fn spawn_root(world: &mut World, display: Display) -> EntityWorldMut {
     world.spawn((
@@ -153,32 +192,38 @@ fn spawn_root(world: &mut World, display: Display) -> EntityWorldMut {
     ))
 }
 
-fn spawn_textbox(parent: &mut WorldChildBuilder, placeholder: impl Into<String>) {
-    parent.spawn((
-        NodeBundle {
-            style: Style {
-                width: Val::Px(500.0),
-                padding: UiRect::axes(Val::Percent(0.9), Val::Percent(0.25)),
+fn spawn_textbox<B: Bundle, M>(
+    parent: &mut WorldChildBuilder,
+    placeholder: impl Into<String>,
+    on_change: impl IntoObserverSystem<TextInputChanged, B, M>,
+) {
+    parent
+        .spawn((
+            NodeBundle {
+                style: Style {
+                    width: Val::Px(500.0),
+                    padding: UiRect::axes(Val::Percent(0.9), Val::Percent(0.25)),
+                    ..default()
+                },
+                focus_policy: FocusPolicy::Block,
+                border_radius: BorderRadius::MAX,
+                border_color: BUTTON_BACKGROUND.into(),
+                background_color: BUTTON_BACKGROUND.into(),
                 ..default()
             },
-            focus_policy: FocusPolicy::Block,
-            border_radius: BorderRadius::MAX,
-            border_color: BUTTON_BACKGROUND.into(),
-            background_color: BUTTON_BACKGROUND.into(),
-            ..default()
-        },
-        TextInput,
-        TextInputTextStyle(TextStyle {
-            font_size: 40.0,
-            color: TEXT_COLOR,
-            ..default()
-        }),
-        TextInputPlaceholder {
-            value: placeholder.into(),
-            text_style: None,
-        },
-        TextInputInactive(true),
-    ));
+            TextInput,
+            TextInputTextStyle(TextStyle {
+                font_size: 40.0,
+                color: TEXT_COLOR,
+                ..default()
+            }),
+            TextInputPlaceholder {
+                value: placeholder.into(),
+                text_style: None,
+            },
+            TextInputInactive(true),
+        ))
+        .observe(on_change);
 }
 
 fn spawn_text(parent: &mut WorldChildBuilder, text: impl Into<String>, font_size: f32) {
@@ -234,6 +279,15 @@ fn switch_menu<F: Deref<Target = Entity> + Resource, T: Deref<Target = Entity> +
     style.get_mut(**to).unwrap().display = Display::Flex;
 }
 
+fn copy_to_resource<T: From<String> + Resource>(
+    trigger: Trigger<TextInputChanged>,
+    mut res: ResMut<T>,
+) {
+    *res = trigger.event().0.clone().into();
+}
+
+/* Other systems */
+
 #[allow(clippy::type_complexity)]
 fn button(
     mut commands: Commands,
@@ -246,7 +300,7 @@ fn button(
     }
 }
 
-fn focus(
+fn textinput_focus(
     query: Query<(Entity, &Interaction), Changed<Interaction>>,
     mut text_input_query: Query<(Entity, &mut TextInputInactive)>,
 ) {
@@ -256,5 +310,14 @@ fn focus(
                 inactive.0 = entity != interaction_entity;
             }
         }
+    }
+}
+
+fn textinput_change(
+    mut commands: Commands,
+    query: Query<(Entity, &TextInputValue), Changed<TextInputValue>>,
+) {
+    for (entity, value) in &query {
+        commands.trigger_targets(TextInputChanged(value.0.clone()), entity);
     }
 }

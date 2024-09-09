@@ -1,12 +1,37 @@
-use bevy::prelude::Trigger;
+use bevy::prelude::{Commands, Resource};
 use bevy_app::{App, Plugin};
+use bevy_state::state::OnEnter;
+
+use crate::AppState;
 
 pub(super) struct ServerPlugin;
 
 impl Plugin for ServerPlugin {
     fn build(&self, app: &mut App) {
-        todo!()
+        app.init_resource::<ServerPassword>()
+            .init_resource::<EditPermissionMode>()
+            .add_systems(OnEnter(AppState::Server), start_server);
     }
 }
 
-pub fn start_server<T>(_: Trigger<T>) {}
+#[derive(Resource, Default)]
+pub struct ServerPassword(String);
+
+impl From<String> for ServerPassword {
+    fn from(password: String) -> Self {
+        Self(password)
+    }
+}
+
+/// Permission mode for controlling which clients can modify the game world
+#[derive(Resource, Default)]
+pub enum EditPermissionMode {
+    /// Only clients in the list can modify the game world.
+    Whitelist,
+    /// Only clients *not* in the list can modify the game world.
+    /// As this is the default and the list starts empty, by default everyone can modify
+    #[default]
+    Blacklist,
+}
+
+fn start_server(mut commands: Commands) {}
