@@ -23,15 +23,15 @@ impl From<String> for ServerPassword {
     }
 }
 
-/// Permission mode for controlling which clients can modify the game world
+/// Permission mode for controlling which clients can modify the game world. The server host can always modify the world.
 #[derive(Resource, Default)]
 pub enum EditPermissionMode {
-    /// Only clients in the list can modify the game world.
-    Whitelist,
     /// Only clients *not* in the list can modify the game world.
     /// As this is the default and the list starts empty, by default everyone can modify
     #[default]
     Blacklist,
+    /// Only clients in the list can modify the game world.
+    Whitelist,
 }
 
 fn start_server(mut commands: Commands) {}
