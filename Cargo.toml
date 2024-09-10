@@ -26,6 +26,7 @@ default = ["platform-verifier"]
 platform-verifier = ["quinn-proto/platform-verifier"]
 
 [dev-dependencies]
+# For writing and reading self-signed certificates in examples
 directories = "5.0"
 
 # For client & server examples

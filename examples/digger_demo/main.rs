@@ -10,6 +10,8 @@ mod crypto;
 mod menu;
 mod server;
 
+const CERT_NAME: &str = "digger_demo";
+
 fn main() -> AppExit {
     App::new()
         .add_plugins((
