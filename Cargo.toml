@@ -39,6 +39,7 @@ bevy = { git = "https://github.com/BigWingBeat/bevy", branch = "ui_compile_error
 	"x11",
 	"bevy_winit",
 	"bevy_ui",
+	"bevy_state",
 	"default_font",
 ] }
 bevy_simple_text_input = { git = "https://github.com/rparrett/bevy_simple_text_input", branch = "bevy_main" }

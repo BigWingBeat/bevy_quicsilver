@@ -1,11 +1,11 @@
-use std::net::Ipv6Addr;
+use std::net::{Ipv6Addr, SocketAddr};
 
-use bevy::prelude::{Commands, Resource};
+use bevy::prelude::{Resource, World};
 use bevy_app::{App, Plugin};
-use bevy_quicsilver::EndpointBundle;
+use bevy_quicsilver::{Endpoint, EndpointBundle};
 use bevy_state::state::OnEnter;
 
-use crate::{crypto::trust_on_first_use_config, AppState};
+use crate::{crypto::trust_on_first_use_config, AppState, CERT_NAME, PORT};
 
 pub(super) struct ClientPlugin;
 
@@ -25,12 +25,16 @@ impl From<String> for ServerAddress {
     }
 }
 
-fn start_client(mut commands: Commands) {
+fn start_client(world: &mut World) {
     let endpoint = EndpointBundle::new_client(
         (Ipv6Addr::UNSPECIFIED, 0).into(),
         Some(trust_on_first_use_config()),
     )
     .unwrap();
 
-    commands.spawn(endpoint);
+    let address = SocketAddr::new(world.resource::<ServerAddress>().0.parse().unwrap(), PORT);
+    world.spawn(endpoint);
+    let mut endpoint = world.query::<Endpoint>().get_single_mut(world).unwrap();
+    let connection = endpoint.connect(address, CERT_NAME).unwrap();
+    world.spawn(connection);
 }

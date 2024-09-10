@@ -536,6 +536,7 @@ dependencies = [
  "bevy_render",
  "bevy_scene",
  "bevy_sprite",
+ "bevy_state",
  "bevy_tasks",
  "bevy_text",
  "bevy_time",
@@ -767,6 +768,8 @@ source = "git+https://github.com/BigWingBeat/bevy?branch=ui_compile_error#2c890b
 dependencies = [
  "bevy_app",
  "bevy_ecs",
+ "bevy_hierarchy",
+ "bevy_reflect",
  "bevy_state_macros",
  "bevy_utils",
 ]

@@ -1,8 +1,8 @@
 use std::{net::Ipv6Addr, sync::Arc};
 
-use bevy::prelude::{Commands, Resource};
+use bevy::prelude::{info, Added, Commands, Component, EventWriter, Query, Resource, Trigger};
 use bevy_app::{App, Plugin};
-use bevy_quicsilver::EndpointBundle;
+use bevy_quicsilver::{EndpointBundle, Incoming, IncomingResponse, NewIncoming};
 use bevy_state::state::OnEnter;
 use quinn_proto::{ClientConfig, ServerConfig};
 use rustls::{
@@ -10,7 +10,7 @@ use rustls::{
     RootCertStore,
 };
 
-use crate::{AppState, CERT_NAME};
+use crate::{AppState, CERT_NAME, PORT};
 
 pub(super) struct ServerPlugin;
 
@@ -18,8 +18,17 @@ impl Plugin for ServerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ServerPassword>()
             .init_resource::<EditPermissionMode>()
-            .add_systems(OnEnter(AppState::Server), start_server);
+            .add_systems(OnEnter(AppState::Server), start_server)
+            .observe(accept_connections);
     }
+}
+
+#[derive(Component, Default)]
+enum ClientState {
+    #[default]
+    WaitingForPassword,
+    Authenticated,
+    Host,
 }
 
 #[derive(Resource, Default)]
@@ -55,7 +64,7 @@ fn start_server(mut commands: Commands) {
     let server_config = ServerConfig::with_single_cert(vec![cert], key).unwrap();
 
     let endpoint = EndpointBundle::new_client_host(
-        (Ipv6Addr::UNSPECIFIED, 5544).into(),
+        (Ipv6Addr::UNSPECIFIED, PORT).into(),
         client_config,
         server_config,
     )
@@ -83,7 +92,7 @@ fn init_crypto() -> (CertificateDer<'static>, PrivateKeyDer<'static>) {
             PrivateKeyDer::try_from(key).unwrap(),
         ),
         Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => {
-            println!("Generating self-signed certificate");
+            info!("Generating self-signed certificate");
             let cert = rcgen::generate_simple_self_signed(vec![CERT_NAME.into()]).unwrap();
             let key = PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der());
             let cert = cert.cert.into();
@@ -96,4 +105,19 @@ fn init_crypto() -> (CertificateDer<'static>, PrivateKeyDer<'static>) {
     };
 
     (cert, key)
+}
+
+fn accept_connections(
+    trigger: Trigger<NewIncoming>,
+    new_connections: Query<&Incoming, Added<Incoming>>,
+    mut new_connection_responses: EventWriter<IncomingResponse>,
+) {
+    let entity = trigger.entity();
+    let incoming = new_connections.get(entity).unwrap();
+    if incoming.remote_address_validated() {
+        info!("Client connecting from {}", incoming.remote_address());
+        new_connection_responses.send(IncomingResponse::accept(entity));
+    } else {
+        new_connection_responses.send(IncomingResponse::retry(entity));
+    }
 }

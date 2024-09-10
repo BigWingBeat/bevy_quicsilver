@@ -11,6 +11,7 @@ mod menu;
 mod server;
 
 const CERT_NAME: &str = "digger_demo";
+const PORT: u16 = 5544;
 
 fn main() -> AppExit {
     App::new()

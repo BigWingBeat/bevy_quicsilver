@@ -44,7 +44,7 @@ impl ServerCertVerifier for TrustOnFirstUse {
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        todo!()
+        self.supported_schemes.supported_schemes()
     }
 }
 
