@@ -1,8 +1,13 @@
 use std::{net::Ipv6Addr, sync::Arc};
 
-use bevy::prelude::{info, Added, Commands, Component, EventWriter, Query, Resource, Trigger};
+use bevy::prelude::{
+    error, info, Added, Commands, Component, EventWriter, Query, Resource, Trigger,
+};
 use bevy_app::{App, Plugin};
-use bevy_quicsilver::{EndpointBundle, Incoming, IncomingResponse, NewIncoming};
+use bevy_quicsilver::{
+    ConnectingError, Connection, ConnectionError, ConnectionEstablished, EndpointBundle,
+    EndpointError, Incoming, IncomingError, IncomingResponse, NewIncoming,
+};
 use bevy_state::state::OnEnter;
 use quinn_proto::{ClientConfig, ServerConfig};
 use rustls::{
@@ -19,7 +24,12 @@ impl Plugin for ServerPlugin {
         app.init_resource::<ServerPassword>()
             .init_resource::<EditPermissionMode>()
             .add_systems(OnEnter(AppState::Server), start_server)
-            .observe(accept_connections);
+            .observe(accept_connections)
+            .observe(endpoint_error)
+            .observe(connecting_error)
+            .observe(incoming_error)
+            .observe(connection_error)
+            .observe(on_connected);
     }
 }
 
@@ -120,4 +130,25 @@ fn accept_connections(
     } else {
         new_connection_responses.send(IncomingResponse::retry(entity));
     }
+}
+
+fn endpoint_error(error: Trigger<EndpointError>) {
+    error!("{}", error.event());
+}
+
+fn connecting_error(error: Trigger<ConnectingError>) {
+    error!("{}", error.event());
+}
+
+fn incoming_error(error: Trigger<IncomingError>) {
+    error!("{}", error.event());
+}
+
+fn connection_error(error: Trigger<ConnectionError>) {
+    error!("{}", error.event());
+}
+
+fn on_connected(trigger: Trigger<ConnectionEstablished>, connection: Query<Connection>) {
+    let connection = connection.get(trigger.entity()).unwrap();
+    info!("Client {} finished connecting", connection.remote_address());
 }
