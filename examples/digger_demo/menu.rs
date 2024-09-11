@@ -288,7 +288,7 @@ fn copy_to_resource<T: From<String> + Resource>(
 
 /* Other systems */
 
-#[allow(clippy::type_complexity)]
+#[expect(clippy::type_complexity)]
 fn button(
     mut commands: Commands,
     query: Query<(Entity, &Interaction), (Changed<Interaction>, With<Button>)>,

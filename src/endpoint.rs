@@ -217,7 +217,7 @@ impl EndpointItem<'_> {
     /// Incoming connections and connections to servers unreachable from the new address will be lost.
     ///
     /// On error, the old UDP socket is retained.
-    #[allow(dead_code)] // Make pub when implemented
+    #[expect(dead_code)] // Make pub when implemented
     fn rebind(&mut self, new_socket: std::net::UdpSocket) -> std::io::Result<()> {
         self.endpoint.rebind(new_socket)
     }
@@ -257,13 +257,13 @@ impl EndpointReadOnlyItem<'_> {
         self.endpoint.open_connections()
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub(crate) fn max_gso_segments(&self) -> usize {
         self.endpoint.max_gso_segments()
     }
 
     /// Send some data over the network.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub(crate) fn send(
         &self,
         transmit: &quinn_proto::Transmit,

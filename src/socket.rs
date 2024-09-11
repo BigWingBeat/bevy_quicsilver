@@ -35,7 +35,7 @@ impl UdpSocket {
         self.state.max_gso_segments()
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub(crate) fn gro_segments(&self) -> usize {
         self.state.gro_segments()
     }
