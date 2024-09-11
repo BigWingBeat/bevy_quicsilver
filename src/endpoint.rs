@@ -280,6 +280,7 @@ pub(crate) struct EndpointImpl {
     default_client_config: Option<ClientConfig>,
     pub(crate) connections: HashMap<ConnectionHandle, Entity>,
     socket: UdpSocket,
+    ipv6: bool,
 }
 
 impl EndpointImpl {
@@ -333,6 +334,7 @@ impl EndpointImpl {
         server_config: Option<ServerConfig>,
         rng_seed: Option<[u8; 32]>,
     ) -> std::io::Result<Self> {
+        let ipv6 = socket.local_addr()?.is_ipv6();
         UdpSocket::new(socket, config.get_max_udp_payload_size()).map(|socket| Self {
             endpoint: quinn_proto::Endpoint::new(
                 Arc::new(config),
@@ -343,6 +345,7 @@ impl EndpointImpl {
             default_client_config,
             connections: HashMap::default(),
             socket,
+            ipv6,
         })
     }
 
@@ -371,12 +374,31 @@ impl EndpointImpl {
     fn connect_with(
         &mut self,
         self_entity: Entity,
-        server_address: SocketAddr,
+        mut server_address: SocketAddr,
         server_name: &str,
         client_config: ClientConfig,
     ) -> Result<ConnectingBundle, ConnectError> {
         let now = Instant::now();
-        // TODO: Why https://github.com/quinn-rs/quinn/blob/0.10.2/quinn/src/endpoint.rs#L185-L192
+
+        // Handle mismatched address families, not handling this can cause the connection to silently fail
+        match server_address {
+            SocketAddr::V4(addr) if self.ipv6 => {
+                // Local socket bound to IPv6, convert target IPv4 address to mapped IPv6
+                server_address = (addr.ip().to_ipv6_mapped(), addr.port()).into()
+            }
+            SocketAddr::V6(addr) if !self.ipv6 => {
+                // Local socket bound to IPv4
+                if let Some(v4) = addr.ip().to_ipv4_mapped() {
+                    // Target address is mapped IPv6, convert it back to IPv4
+                    server_address = (v4, addr.port()).into();
+                } else {
+                    // Target is a normal IPv6 address, can't be handled by an IPv4 stack
+                    return Err(ConnectError::InvalidRemoteAddress(server_address));
+                }
+            }
+            _ => {} // Address family matches already, no problem
+        };
+
         self.endpoint
             .connect(now, client_config, server_address, server_name)
             .map(|(handle, connection)| {
@@ -480,6 +502,7 @@ pub(crate) fn poll_endpoints(
             default_client_config: _,
             connections,
             socket,
+            ipv6: _,
         } = &mut *endpoint_impl;
 
         let mut transmits = Vec::new();
