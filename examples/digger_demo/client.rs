@@ -1,14 +1,14 @@
 use std::net::{Ipv6Addr, SocketAddr};
 
-use bevy::prelude::{error, info, Resource, Trigger, World};
+use bevy::prelude::{error, Resource, Trigger, World};
 use bevy_app::{App, Plugin};
 use bevy_quicsilver::{
-    Connecting, ConnectingError, ConnectionError, ConnectionEstablished, Endpoint, EndpointBundle,
+    ConnectingError, ConnectionError, ConnectionEstablished, Endpoint, EndpointBundle,
     EndpointError, IncomingError,
 };
 use bevy_state::state::OnEnter;
 
-use crate::{crypto::trust_on_first_use_config, AppState, CERT_NAME, PORT};
+use crate::{crypto::trust_on_first_use_config, AppState, ErrorMessage, CERT_NAME, PORT};
 
 pub(super) struct ClientPlugin;
 
@@ -34,7 +34,14 @@ impl From<String> for ServerAddress {
 }
 
 fn start_client(world: &mut World) {
-    let address = SocketAddr::new(world.resource::<ServerAddress>().0.parse().unwrap(), PORT);
+    let address = match world.resource::<ServerAddress>().0.parse() {
+        Ok(a) => a,
+        Err(e) => {
+            world.trigger(ErrorMessage(anyhow::Error::from(e)));
+            return;
+        }
+    };
+    let address = SocketAddr::new(address, PORT);
 
     let endpoint = EndpointBundle::new_client(
         (Ipv6Addr::UNSPECIFIED, 0).into(),
@@ -44,8 +51,12 @@ fn start_client(world: &mut World) {
 
     world.spawn(endpoint);
     let mut endpoint = world.query::<Endpoint>().get_single_mut(world).unwrap();
-    let connection = endpoint.connect(address, CERT_NAME).unwrap();
-    world.spawn(connection);
+    match endpoint.connect(address, CERT_NAME) {
+        Ok(connection) => {
+            world.spawn(connection);
+        }
+        Err(e) => world.trigger(ErrorMessage(e.into())),
+    }
 }
 
 fn endpoint_error(error: Trigger<EndpointError>) {

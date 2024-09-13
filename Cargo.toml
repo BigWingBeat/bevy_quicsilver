@@ -45,6 +45,7 @@ bevy = { git = "https://github.com/BigWingBeat/bevy", branch = "ui_compile_error
 ] }
 bevy_simple_text_input = { git = "https://github.com/rparrett/bevy_simple_text_input", branch = "bevy_main" }
 # bevy_ecs_tilemap = { path = "../../bevy_ecs_tilemap" }
+anyhow = "1.0"
 
 [patch."https://github.com/bevyengine/bevy"]
 bevy = { git = "https://github.com/BigWingBeat/bevy", branch = "ui_compile_error" }

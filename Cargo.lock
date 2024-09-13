@@ -129,6 +129,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.88"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e1496f8fb1fbf272686b8d37f523dab3e4a7443300055e74cdaa449f3114356"
+
+[[package]]
 name = "approx"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -604,6 +610,7 @@ source = "git+https://github.com/BigWingBeat/bevy?branch=ui_compile_error#d448bd
 name = "bevy_quicsilver"
 version = "0.1.1"
 dependencies = [
+ "anyhow",
  "bevy",
  "bevy_app",
  "bevy_ecs",

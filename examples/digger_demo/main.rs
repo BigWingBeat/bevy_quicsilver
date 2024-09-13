@@ -33,15 +33,18 @@ fn startup(world: &mut World) {
 }
 
 #[derive(States, Default, Debug, Hash, PartialEq, Eq, Clone)]
-pub enum AppState {
+enum AppState {
     #[default]
     Menu,
     Client,
     Server,
 }
 
+#[derive(Event)]
+struct ErrorMessage(anyhow::Error);
+
 #[derive(Resource, Default)]
-pub struct Username(pub String);
+struct Username(String);
 
 impl From<String> for Username {
     fn from(username: String) -> Self {

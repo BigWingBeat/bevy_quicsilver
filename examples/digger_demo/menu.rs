@@ -12,7 +12,7 @@ use bevy_state::state::NextState;
 use crate::{
     client::ServerAddress,
     server::{EditPermissionMode, ServerPassword},
-    AppState, Username,
+    AppState, ErrorMessage, Username,
 };
 
 const WINDOW_BACKGROUND: ClearColor = ClearColor(Color::Srgba(ZINC_700));
@@ -27,7 +27,9 @@ impl Plugin for MenuPlugin {
         app.add_plugins(TextInputPlugin)
             .insert_resource(WINDOW_BACKGROUND)
             .add_systems(Startup, spawn_menus)
-            .add_systems(Update, (button, textinput_focus, textinput_change));
+            .add_systems(Update, (button, textinput_focus, textinput_change))
+            .observe(switch_menu_handler)
+            .observe(error_message);
     }
 }
 
@@ -35,7 +37,16 @@ impl Plugin for MenuPlugin {
 struct ButtonPress;
 
 #[derive(Event)]
+struct SwitchMenu {
+    from: Entity,
+    to: Entity,
+}
+
+#[derive(Event)]
 struct TextInputChanged(String);
+
+#[derive(Resource)]
+struct CurrentMenu(Entity);
 
 #[derive(Resource, Deref)]
 pub struct TitleRoot(pub Entity);
@@ -47,7 +58,13 @@ pub struct HostRoot(pub Entity);
 pub struct JoinRoot(pub Entity);
 
 #[derive(Resource, Deref)]
+pub struct ErrorRoot(pub Entity);
+
+#[derive(Resource, Deref)]
 pub struct GameRoot(pub Entity);
+
+#[derive(Resource)]
+struct ErrorText(Entity);
 
 /* Startup systems */
 
@@ -56,6 +73,7 @@ pub fn spawn_menus(world: &mut World) {
     spawn_title(world);
     spawn_host(world);
     spawn_join(world);
+    spawn_error(world);
     spawn_game(world);
 }
 
@@ -82,6 +100,7 @@ fn spawn_title(world: &mut World) {
         })
         .id();
     world.insert_resource(TitleRoot(id));
+    world.insert_resource(CurrentMenu(id));
 }
 
 /// Spawn the 'host a game' menu:
@@ -165,6 +184,23 @@ fn spawn_join(world: &mut World) {
     world.insert_resource(JoinRoot(id));
 }
 
+/// Spawn the error message screen:
+/// - Title text
+/// - Error message
+/// - Back to title button
+fn spawn_error(world: &mut World) {
+    let mut text_id = Entity::PLACEHOLDER;
+    let id = spawn_root(world, Display::None)
+        .with_children(|parent| {
+            spawn_text(parent, "Error", TITLE_TEXT_SIZE);
+            text_id = spawn_text(parent, "", TITLE_TEXT_SIZE).id();
+            spawn_button(parent, "Back", switch_menu::<ErrorRoot, TitleRoot>);
+        })
+        .id();
+    world.insert_resource(ErrorRoot(id));
+    world.insert_resource(ErrorText(text_id));
+}
+
 /// Spawn the in-game GUI:
 /// - Nothing for now
 fn spawn_game(world: &mut World) {
@@ -226,7 +262,11 @@ fn spawn_textbox<B: Bundle, M>(
         .observe(on_change);
 }
 
-fn spawn_text(parent: &mut WorldChildBuilder, text: impl Into<String>, font_size: f32) {
+fn spawn_text<'a>(
+    parent: &'a mut WorldChildBuilder<'_>,
+    text: impl Into<String>,
+    font_size: f32,
+) -> EntityWorldMut<'a> {
     parent.spawn(
         TextBundle::from_section(
             text,
@@ -237,7 +277,7 @@ fn spawn_text(parent: &mut WorldChildBuilder, text: impl Into<String>, font_size
             },
         )
         .with_text_justify(JustifyText::Center),
-    );
+    )
 }
 
 fn spawn_button<'a, B: Bundle, M>(
@@ -269,14 +309,27 @@ fn spawn_button<'a, B: Bundle, M>(
     e
 }
 
+fn switch_menu_handler(
+    trigger: Trigger<SwitchMenu>,
+    mut style: Query<&mut Style>,
+    mut current_menu: ResMut<CurrentMenu>,
+) {
+    let &SwitchMenu { from, to } = trigger.event();
+    style.get_mut(from).unwrap().display = Display::None;
+    style.get_mut(to).unwrap().display = Display::Flex;
+    current_menu.0 = to;
+}
+
 fn switch_menu<F: Deref<Target = Entity> + Resource, T: Deref<Target = Entity> + Resource>(
     _: Trigger<ButtonPress>,
-    mut style: Query<&mut Style>,
+    mut commands: Commands,
     from: Res<F>,
     to: Res<T>,
 ) {
-    style.get_mut(**from).unwrap().display = Display::None;
-    style.get_mut(**to).unwrap().display = Display::Flex;
+    commands.trigger(SwitchMenu {
+        from: **from,
+        to: **to,
+    });
 }
 
 fn copy_to_resource<T: From<String> + Resource>(
@@ -320,4 +373,29 @@ fn textinput_change(
     for (entity, value) in &query {
         commands.trigger_targets(TextInputChanged(value.0.clone()), entity);
     }
+}
+
+fn error_message(
+    trigger: Trigger<ErrorMessage>,
+    mut commands: Commands,
+    mut query: Query<&mut Text>,
+    current_menu: Res<CurrentMenu>,
+    error_menu: Res<ErrorRoot>,
+    error_text: Res<ErrorText>,
+) {
+    commands.trigger(SwitchMenu {
+        from: current_menu.0,
+        to: error_menu.0,
+    });
+
+    let mut text = query.get_mut(error_text.0).unwrap();
+    text.sections.clear();
+    text.sections.push(TextSection::new(
+        trigger.event().0.to_string(),
+        TextStyle {
+            font_size: TITLE_TEXT_SIZE,
+            color: TEXT_COLOR,
+            ..default()
+        },
+    ));
 }
