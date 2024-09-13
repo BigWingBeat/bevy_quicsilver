@@ -28,6 +28,7 @@ platform-verifier = ["quinn-proto/platform-verifier"]
 [dev-dependencies]
 # For writing and reading self-signed certificates in examples
 directories = "5.0"
+ring = { version = "0.17", default-features = false }
 
 # For client & server examples
 bevy_state = { git = "https://github.com/BigWingBeat/bevy", branch = "ui_compile_error", default-features = false, features = [
