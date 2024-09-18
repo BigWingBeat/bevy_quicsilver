@@ -1,29 +1,33 @@
 use std::{net::Ipv6Addr, sync::Arc};
 
 use bevy::prelude::{
-    error, info, Added, Commands, Component, EventWriter, Query, Resource, Trigger,
+    error, in_state, info, warn, Added, Commands, Component, EventWriter, IntoSystemConfigs, Query,
+    Res, Resource, Trigger,
 };
-use bevy_app::{App, Plugin};
+use bevy_app::{App, Plugin, Update};
 use bevy_quicsilver::{
     ConnectingError, Connection, ConnectionError, ConnectionEstablished, EndpointBundle,
     EndpointError, Incoming, IncomingError, IncomingResponse, NewIncoming,
 };
 use bevy_state::state::OnEnter;
-use quinn_proto::{ClientConfig, ServerConfig};
+use bincode::{DefaultOptions, Options};
+use bytes::{Buf, Bytes};
+use bytes_utils::SegmentedBuf;
+use quinn_proto::{Chunk, ClientConfig, ServerConfig, StreamId};
 use rustls::{
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
     RootCertStore,
 };
 
-use crate::{AppState, CERT_NAME, PORT};
+use crate::{proto::ClientHello, AppState, Password, CERT_NAME, PORT};
 
 pub(super) struct ServerPlugin;
 
 impl Plugin for ServerPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ServerPassword>()
-            .init_resource::<EditPermissionMode>()
+        app.init_resource::<EditPermissionMode>()
             .add_systems(OnEnter(AppState::Server), start_server)
+            .add_systems(Update, poll_clients.run_if(in_state(AppState::Server)))
             .observe(accept_connections)
             .observe(endpoint_error)
             .observe(connecting_error)
@@ -36,18 +40,11 @@ impl Plugin for ServerPlugin {
 #[derive(Component, Default)]
 enum ClientState {
     #[default]
-    WaitingForPassword,
+    WaitingForHello,
+    ProcessingHello(StreamId, SegmentedBuf<Bytes>),
     Authenticated,
+    Closed,
     Host,
-}
-
-#[derive(Resource, Default)]
-pub struct ServerPassword(String);
-
-impl From<String> for ServerPassword {
-    fn from(password: String) -> Self {
-        Self(password)
-    }
 }
 
 /// Permission mode for controlling which clients can modify the game world. The server host can always modify the world.
@@ -119,6 +116,7 @@ fn init_crypto() -> (CertificateDer<'static>, PrivateKeyDer<'static>) {
 
 fn accept_connections(
     trigger: Trigger<NewIncoming>,
+    mut commands: Commands,
     new_connections: Query<&Incoming, Added<Incoming>>,
     mut new_connection_responses: EventWriter<IncomingResponse>,
 ) {
@@ -127,6 +125,7 @@ fn accept_connections(
     if incoming.remote_address_validated() {
         info!("Client connecting from {}", incoming.remote_address());
         new_connection_responses.send(IncomingResponse::accept(entity));
+        commands.entity(entity).insert(ClientState::WaitingForHello);
     } else {
         new_connection_responses.send(IncomingResponse::retry(entity));
     }
@@ -149,6 +148,50 @@ fn connection_error(error: Trigger<ConnectionError>) {
 }
 
 fn on_connected(trigger: Trigger<ConnectionEstablished>, connection: Query<Connection>) {
-    let connection = connection.get(trigger.entity()).unwrap();
-    info!("Client {} finished connecting", connection.remote_address());
+    // let connection = connection.get(trigger.entity()).unwrap();
+    // info!("Client {} finished connecting", connection.remote_address());
+}
+
+fn poll_clients(mut query: Query<(Connection, &mut ClientState)>, password: Res<Password>) {
+    for (mut connection, mut state) in &mut query {
+        match &mut *state {
+            ClientState::WaitingForHello => {
+                if let Some(stream) = connection.accept_uni() {
+                    *state = ClientState::ProcessingHello(stream.id(), SegmentedBuf::new());
+                }
+            }
+            ClientState::ProcessingHello(id, ref mut prev_bytes) => {
+                let mut stream = connection.recv_stream(*id).unwrap();
+                match stream.read_chunk(usize::MAX, true) {
+                    Ok(Some(Chunk { bytes, .. })) => prev_bytes.push(bytes),
+                    Ok(None) => match DefaultOptions::new().deserialize_from(prev_bytes.reader()) {
+                        Ok(hello @ ClientHello { .. }) => {
+                            if hello.password != password.0 {
+                                connection
+                                    .close(1u8.into(), Bytes::from_static(b"Incorrect Password"));
+                                *state = ClientState::Closed;
+                                warn!(
+                                    "Disconnecting client '{}' ({}) for giving incorrect password",
+                                    hello.username,
+                                    connection.remote_address()
+                                );
+                            } else {
+                                info!(
+                                    "Client '{}' ({}) gave correct password",
+                                    hello.username,
+                                    connection.remote_address()
+                                );
+                                *state = ClientState::Authenticated;
+                            }
+                        }
+                        Err(e) => todo!(),
+                    },
+                    Err(e) => todo!(),
+                }
+            }
+            ClientState::Authenticated => {}
+            ClientState::Closed => {}
+            ClientState::Host => {}
+        }
+    }
 }

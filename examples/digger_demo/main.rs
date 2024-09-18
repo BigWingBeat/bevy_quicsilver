@@ -8,6 +8,7 @@ use server::ServerPlugin;
 mod client;
 mod crypto;
 mod menu;
+mod proto;
 mod server;
 
 const CERT_NAME: &str = "digger_demo";
@@ -24,6 +25,7 @@ fn main() -> AppExit {
         ))
         .init_state::<AppState>()
         .init_resource::<Username>()
+        .init_resource::<Password>()
         .add_systems(Startup, startup)
         .run()
 }
@@ -49,5 +51,14 @@ struct Username(String);
 impl From<String> for Username {
     fn from(username: String) -> Self {
         Self(username)
+    }
+}
+
+#[derive(Resource, Default)]
+struct Password(String);
+
+impl From<String> for Password {
+    fn from(password: String) -> Self {
+        Self(password)
     }
 }

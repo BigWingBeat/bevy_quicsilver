@@ -10,9 +10,7 @@ use bevy_simple_text_input::{
 use bevy_state::state::NextState;
 
 use crate::{
-    client::ServerAddress,
-    server::{EditPermissionMode, ServerPassword},
-    AppState, ErrorMessage, Username,
+    client::ServerAddress, server::EditPermissionMode, AppState, ErrorMessage, Password, Username,
 };
 
 const WINDOW_BACKGROUND: ClearColor = ClearColor(Color::Srgba(ZINC_700));
@@ -114,11 +112,7 @@ fn spawn_host(world: &mut World) {
     let id = spawn_root(world, Display::None)
         .with_children(|parent| {
             spawn_text(parent, "Host a game", TITLE_TEXT_SIZE);
-            spawn_textbox(
-                parent,
-                "Server Password...",
-                copy_to_resource::<ServerPassword>,
-            );
+            spawn_textbox(parent, "Server Password...", copy_to_resource::<Password>);
 
             parent
                 .spawn(NodeBundle {
@@ -172,6 +166,11 @@ fn spawn_join(world: &mut World) {
                 parent,
                 "Enter Server Address...",
                 copy_to_resource::<ServerAddress>,
+            );
+            spawn_textbox(
+                parent,
+                "Enter Server Password...",
+                copy_to_resource::<Password>,
             );
             spawn_button(parent, "Join Server", switch_menu::<JoinRoot, GameRoot>).observe(
                 |_: Trigger<ButtonPress>, mut state: ResMut<NextState<AppState>>| {

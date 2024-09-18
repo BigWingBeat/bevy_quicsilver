@@ -1,14 +1,18 @@
 use std::net::{Ipv6Addr, SocketAddr};
 
-use bevy::prelude::{error, Resource, Trigger, World};
+use bevy::prelude::{error, info, Component, Query, Res, Resource, Trigger, World};
 use bevy_app::{App, Plugin};
 use bevy_quicsilver::{
-    ConnectingError, ConnectionError, ConnectionEstablished, Endpoint, EndpointBundle,
+    ConnectingError, Connection, ConnectionError, ConnectionEstablished, Endpoint, EndpointBundle,
     EndpointError, IncomingError,
 };
 use bevy_state::state::OnEnter;
+use bincode::{DefaultOptions, Options};
 
-use crate::{crypto::trust_on_first_use_config, AppState, ErrorMessage, CERT_NAME, PORT};
+use crate::{
+    crypto::trust_on_first_use_config, proto::ClientHello, AppState, ErrorMessage, Password,
+    Username, CERT_NAME, PORT,
+};
 
 pub(super) struct ClientPlugin;
 
@@ -19,9 +23,15 @@ impl Plugin for ClientPlugin {
             .observe(endpoint_error)
             .observe(connecting_error)
             .observe(incoming_error)
-            .observe(connection_error)
-            .observe(on_connected);
+            .observe(connection_error);
     }
+}
+
+#[derive(Component)]
+enum ConnectionState {
+    Connecting,
+    SendingHello,
+    Authenticated,
 }
 
 #[derive(Resource, Default)]
@@ -53,7 +63,9 @@ fn start_client(world: &mut World) {
     let mut endpoint = world.query::<Endpoint>().get_single_mut(world).unwrap();
     match endpoint.connect(address, CERT_NAME) {
         Ok(connection) => {
-            world.spawn(connection);
+            world
+                .spawn((connection, ConnectionState::Connecting))
+                .observe(on_connected);
         }
         Err(e) => world.trigger(ErrorMessage(e.into())),
     }
@@ -75,6 +87,22 @@ fn connection_error(error: Trigger<ConnectionError>) {
     error!("{}", error.event());
 }
 
-fn on_connected(_: Trigger<ConnectionEstablished>) {
-    //
+fn on_connected(
+    _: Trigger<ConnectionEstablished>,
+    mut connection: Query<(Connection, &mut ConnectionState)>,
+    username: Res<Username>,
+    password: Res<Password>,
+) {
+    let (mut connection, mut state) = connection.single_mut();
+    assert!(matches!(*state, ConnectionState::Connecting));
+    *state = ConnectionState::SendingHello;
+    let hello = ClientHello {
+        username: username.0.clone(),
+        password: password.0.clone(),
+    };
+    let mut stream = connection.open_uni().unwrap();
+    let serialized = DefaultOptions::new().serialize(&hello).unwrap();
+    stream.write_chunk(serialized.into()).unwrap();
+    stream.finish().unwrap();
+    info!("Sending hello");
 }
