@@ -19,6 +19,7 @@ thiserror = "1.0"
 quinn-proto = { version = "0.11", default-features = false, features = ["rustls"] }
 quinn-udp = { version = "0.5", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["logging", "std", "ring"] }
+ring = { version = "0.17", default-features = false }
 rcgen = { version = "0.13", default-features = false, features = ["crypto", "ring"] }
 
 [features]
@@ -28,7 +29,9 @@ platform-verifier = ["quinn-proto/platform-verifier"]
 [dev-dependencies]
 # For writing and reading self-signed certificates in examples
 directories = "5.0"
-ring = { version = "0.17", default-features = false }
+
+# For constructing a server certificate verifier in examples
+rustls-platform-verifier = "0.4"
 
 # For client & server examples
 bevy_state = { git = "https://github.com/BigWingBeat/bevy", branch = "ui_compile_error", default-features = false, features = [
