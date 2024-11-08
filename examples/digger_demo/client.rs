@@ -1,18 +1,20 @@
-use std::net::{Ipv6Addr, SocketAddr};
+use std::{
+    net::{Ipv6Addr, SocketAddr},
+    sync::Arc,
+};
 
 use bevy::prelude::{error, info, Component, Query, Res, Resource, Trigger, World};
 use bevy_app::{App, Plugin};
 use bevy_quicsilver::{
+    crypto::{CryptoConfigExt, FilesystemTofuServerCertStore, SelfSignedTofuServerVerifier},
     ConnectingError, Connection, ConnectionError, ConnectionEstablished, Endpoint, EndpointBundle,
     EndpointError, IncomingError,
 };
 use bevy_state::state::OnEnter;
 use bincode::{DefaultOptions, Options};
+use quinn_proto::ClientConfig;
 
-use crate::{
-    crypto::trust_on_first_use_config, proto::ClientHello, AppState, ErrorMessage, Password,
-    Username, CERT_NAME, PORT,
-};
+use crate::{proto::ClientHello, AppState, ErrorMessage, Password, Username, CERT_NAME, PORT};
 
 pub(super) struct ClientPlugin;
 
@@ -53,11 +55,9 @@ fn start_client(world: &mut World) {
     };
     let address = SocketAddr::new(address, PORT);
 
-    let endpoint = EndpointBundle::new_client(
-        (Ipv6Addr::UNSPECIFIED, 0).into(),
-        Some(trust_on_first_use_config()),
-    )
-    .unwrap();
+    let endpoint =
+        EndpointBundle::new_client((Ipv6Addr::UNSPECIFIED, 0).into(), Some(setup_crypto()))
+            .unwrap();
 
     world.spawn(endpoint);
     let mut endpoint = world.query::<Endpoint>().get_single_mut(world).unwrap();
@@ -69,6 +69,23 @@ fn start_client(world: &mut World) {
         }
         Err(e) => world.trigger(ErrorMessage(e.into())),
     }
+}
+
+fn setup_crypto() -> ClientConfig {
+    let dirs = directories::ProjectDirs::from("org", "bevy_quicsilver", "bevy_quicsilver examples")
+        .unwrap();
+
+    let path = dirs.data_local_dir().join("digger_demo");
+    let cert_dir = path.join("tofu");
+    ClientConfig::with_rustls_config(
+        rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(SelfSignedTofuServerVerifier::new(
+                Arc::new(FilesystemTofuServerCertStore::new(cert_dir).unwrap()),
+            )))
+            .with_no_client_auth(),
+    )
+    .unwrap()
 }
 
 fn endpoint_error(error: Trigger<EndpointError>) {

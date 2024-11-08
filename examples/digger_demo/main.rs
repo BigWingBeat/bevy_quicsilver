@@ -6,7 +6,6 @@ use menu::MenuPlugin;
 use server::ServerPlugin;
 
 mod client;
-mod crypto;
 mod menu;
 mod proto;
 mod server;
@@ -15,6 +14,10 @@ const CERT_NAME: &str = "digger_demo";
 const PORT: u16 = 5544;
 
 fn main() -> AppExit {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .unwrap();
+
     App::new()
         .add_plugins((
             DefaultPlugins,

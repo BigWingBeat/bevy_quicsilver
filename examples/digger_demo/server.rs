@@ -86,7 +86,7 @@ fn start_server(mut commands: Commands) {
 fn init_crypto() -> (CertificateDer<'static>, PrivateKeyDer<'static>) {
     let dirs = directories::ProjectDirs::from("org", "bevy_quicsilver", "bevy_quicsilver examples")
         .unwrap();
-    let path = dirs.data_local_dir();
+    let path = dirs.data_local_dir().join("digger_demo");
 
     let cert_path = path.join("cert.der");
     let key_path = path.join("key.der");

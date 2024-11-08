@@ -154,6 +154,7 @@ impl FilesystemTofuServerCertStore {
                 .then_some((name, hash))
         }
 
+        std::fs::create_dir_all(dir)?;
         for entry in std::fs::read_dir(dir)? {
             let Some((name, contents)) = parse_entry(entry) else {
                 continue;
@@ -193,6 +194,7 @@ impl TofuServerCertStore for FilesystemTofuServerCertStore {
         let map = self.map.read().unwrap();
         let Some(known_hash) = map.get(server_name) else {
             // New server name
+            drop(map);
             self.store(end_entity, server_name);
             return Ok(ServerCertVerified::assertion());
         };

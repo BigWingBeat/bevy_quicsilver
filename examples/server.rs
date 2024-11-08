@@ -68,7 +68,7 @@ fn spawn_endpoint(mut commands: Commands) {
 fn init_crypto() -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) {
     let dirs = directories::ProjectDirs::from("org", "bevy_quicsilver", "bevy_quicsilver examples")
         .unwrap();
-    let path = dirs.data_local_dir();
+    let path = dirs.data_local_dir().join("simple");
 
     let cert_path = path.join("cert.der");
     let key_path = path.join("key.der");

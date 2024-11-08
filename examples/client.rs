@@ -76,7 +76,7 @@ fn spawn_endpoint(mut commands: Commands) {
 fn read_crypto() -> RootCertStore {
     let dirs = directories::ProjectDirs::from("org", "bevy_quicsilver", "bevy_quicsilver examples")
         .unwrap();
-    let path = dirs.data_local_dir();
+    let path = dirs.data_local_dir().join("simple");
 
     let cert_path = path.join("cert.der");
 
