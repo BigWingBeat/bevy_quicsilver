@@ -1,14 +1,10 @@
-use std::{
-    net::{Ipv6Addr, SocketAddr},
-    sync::Arc,
-};
+use std::net::{Ipv6Addr, SocketAddr};
 
 use bevy::prelude::{error, info, Component, Query, Res, Resource, Trigger, World};
 use bevy_app::{App, Plugin};
 use bevy_quicsilver::{
-    crypto::{CryptoConfigExt, FilesystemTofuServerCertStore, SelfSignedTofuServerVerifier},
-    ConnectingError, Connection, ConnectionError, ConnectionEstablished, Endpoint, EndpointBundle,
-    EndpointError, IncomingError,
+    crypto::ClientConfigExt, ConnectingError, Connection, ConnectionError, ConnectionEstablished,
+    Endpoint, EndpointBundle, EndpointError, IncomingError,
 };
 use bevy_state::state::OnEnter;
 use bincode::{DefaultOptions, Options};
@@ -77,15 +73,7 @@ fn setup_crypto() -> ClientConfig {
 
     let path = dirs.data_local_dir().join("digger_demo");
     let cert_dir = path.join("tofu");
-    ClientConfig::with_rustls_config(
-        rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(SelfSignedTofuServerVerifier::new(
-                Arc::new(FilesystemTofuServerCertStore::new(cert_dir).unwrap()),
-            )))
-            .with_no_client_auth(),
-    )
-    .unwrap()
+    ClientConfig::with_trust_on_first_use(cert_dir).unwrap()
 }
 
 fn endpoint_error(error: Trigger<EndpointError>) {
