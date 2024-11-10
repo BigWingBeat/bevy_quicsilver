@@ -1,9 +1,9 @@
 use std::{
     fmt::Debug,
     fs::{DirEntry, File},
-    io::{self, Read},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex},
 };
 
 pub use quinn_proto::crypto::*;
@@ -15,28 +15,51 @@ use ::rustls::{
     },
     pki_types::{CertificateDer, ServerName, UnixTime},
     server::ParsedCertificate,
-    CertificateError, DigitallySignedStruct, RootCertStore, SignatureScheme,
+    CertificateError, DigitallySignedStruct, OtherError, RootCertStore, SignatureScheme,
 };
 use hashbrown::HashMap;
+use x509_parser::{
+    error::X509Error,
+    prelude::{FromDer, Validity, X509Certificate},
+    time::ASN1Time,
+};
 
 pub const CERT_DIGEST_LEN: usize = ring::digest::SHA256_OUTPUT_LEN;
 
-pub type TofuCertMap = HashMap<ServerName<'static>, [u8; CERT_DIGEST_LEN]>;
+pub type CertDigest = [u8; CERT_DIGEST_LEN];
 
-/// Handles storing and retrieving server certificates for trust-on-first-use verification
+fn digest(end_entity: &[u8]) -> CertDigest {
+    ring::digest::digest(&ring::digest::SHA256, end_entity)
+        .as_ref()
+        .try_into()
+        .unwrap()
+}
+
+pub type TofuCertMap = HashMap<ServerName<'static>, (CertDigest, Validity)>;
+
+/// Handles storing and retrieving server certificate information for trust-on-first-use verification
 pub trait TofuServerCertStore: Debug {
-    /// Perform trust-on-first-use verification for the given end-entity certificate and server name
-    fn verify_server_cert(
-        &self,
-        end_entity: &CertificateDer,
+    /// Write the given certificate digest and validity information to the store,
+    /// using the specified server name as the key.
+    fn store_certificate(
+        &mut self,
+        digest: CertDigest,
+        validity: &Validity,
         server_name: &ServerName<'_>,
-    ) -> Result<ServerCertVerified, rustls::Error>;
+    );
+
+    /// Retrieve the certificate digest and validity information associated with the specified server name
+    /// from the store, if present.
+    fn retrieve_certificate<'a, 'b: 'a>(
+        &'a self,
+        server_name: &ServerName<'b>,
+    ) -> Option<&'a (CertDigest, Validity)>;
 }
 
 /// Implements trust-on-first-use verification by storing previously seen certificate digests in memory
 #[derive(Debug, Default)]
 pub struct InMemoryTofuServerCertStore {
-    map: RwLock<TofuCertMap>,
+    map: TofuCertMap,
 }
 
 impl InMemoryTofuServerCertStore {
@@ -47,36 +70,26 @@ impl InMemoryTofuServerCertStore {
 
     /// Creates a new cert store populated with the given server name -> cert digest mappings
     pub fn new_with_certs(certs: TofuCertMap) -> Self {
-        Self {
-            map: RwLock::new(certs),
-        }
+        Self { map: certs }
     }
 }
 
 impl TofuServerCertStore for InMemoryTofuServerCertStore {
-    fn verify_server_cert(
-        &self,
-        end_entity: &CertificateDer,
+    fn store_certificate(
+        &mut self,
+        digest: CertDigest,
+        validity: &Validity,
         server_name: &ServerName<'_>,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        let mut map = self.map.write().unwrap();
-        let hash = ring::digest::digest(&ring::digest::SHA256, end_entity);
+    ) {
+        self.map
+            .insert(server_name.to_owned(), (digest, validity.clone()));
+    }
 
-        let Some(known_hash) = map.get(server_name) else {
-            // New server name
-            map.insert(server_name.to_owned(), hash.as_ref().try_into().unwrap());
-            return Ok(ServerCertVerified::assertion());
-        };
-
-        if known_hash == hash.as_ref() {
-            // Cert matches previous entry for this server name
-            Ok(ServerCertVerified::assertion())
-        } else {
-            // Cert does not match
-            Err(rustls::Error::InvalidCertificate(
-                CertificateError::ApplicationVerificationFailure,
-            ))
-        }
+    fn retrieve_certificate<'a, 'b: 'a>(
+        &'a self,
+        server_name: &ServerName<'b>,
+    ) -> Option<&'a (CertDigest, Validity)> {
+        self.map.get(server_name)
     }
 }
 
@@ -84,7 +97,7 @@ impl TofuServerCertStore for InMemoryTofuServerCertStore {
 #[derive(Debug)]
 pub struct FilesystemTofuServerCertStore {
     fs_path: PathBuf,
-    map: RwLock<TofuCertMap>,
+    map: TofuCertMap,
 }
 
 impl FilesystemTofuServerCertStore {
@@ -94,10 +107,7 @@ impl FilesystemTofuServerCertStore {
         let fs_path = path.into();
         let mut map = TofuCertMap::new();
         Self::parse_directory(&fs_path, &mut map)?;
-        Ok(Self {
-            fs_path,
-            map: RwLock::new(map),
-        })
+        Ok(Self { fs_path, map })
     }
 
     /// Creates a new filesystem cert store, that will store certificate digests in the specified directory,
@@ -108,7 +118,7 @@ impl FilesystemTofuServerCertStore {
         Self::parse_directory(&fs_path, &mut certs)?;
         Ok(Self {
             fs_path,
-            map: RwLock::new(certs),
+            map: certs,
         })
     }
 
@@ -118,7 +128,7 @@ impl FilesystemTofuServerCertStore {
     pub fn new_empty(path: impl Into<PathBuf>) -> Self {
         Self {
             fs_path: path.into(),
-            map: RwLock::default(),
+            map: TofuCertMap::default(),
         }
     }
 
@@ -128,51 +138,70 @@ impl FilesystemTofuServerCertStore {
     pub fn new_empty_with_certs(path: impl Into<PathBuf>, certs: TofuCertMap) -> Self {
         Self {
             fs_path: path.into(),
-            map: RwLock::new(certs),
+            map: certs,
         }
     }
 
     fn parse_directory(dir: &Path, map: &mut TofuCertMap) -> io::Result<()> {
         fn parse_entry(
             entry: Result<DirEntry, std::io::Error>,
-        ) -> Option<(ServerName<'static>, [u8; CERT_DIGEST_LEN])> {
+        ) -> Option<(ServerName<'static>, CertDigest, Validity)> {
             let entry = entry.ok()?;
             let name = entry.file_name().into_string().ok()?;
             // IPv6 addresses have their : replaced with £ so they're valid filenames on windows
             let name = name.replace('£', ":").try_into().ok()?;
 
-            // Read the SHA256 hash from the file
+            // Read the SHA256 digest from the file
             let mut file = File::open(entry.path()).ok()?;
-            let mut hash = [0; CERT_DIGEST_LEN];
-            file.read_exact(&mut hash).ok()?;
+            let mut digest = [0; CERT_DIGEST_LEN];
+            file.read_exact(&mut digest).ok()?;
+
+            // Read the validity information from the file
+            let mut not_before = [0; 8];
+            file.read_exact(&mut not_before).ok()?;
+
+            let mut not_after = [0; 8];
+            file.read_exact(&mut not_after).ok()?;
+
+            let validity = Validity {
+                not_before: ASN1Time::from_timestamp(i64::from_le_bytes(not_before)).ok()?,
+                not_after: ASN1Time::from_timestamp(i64::from_le_bytes(not_after)).ok()?,
+            };
 
             // Read 1 more byte to check if there's any data left in the file, without reading the whole thing into memory.
-            // UnexpectedEof means the hash we read previously was the entire contents of the file, which is what we want.
-            // If there's more data, that means the file is not one of our certificate digests, so we skip it
+            // UnexpectedEof means the data we read previously was the entire contents of the file, which is what we want.
+            // If there's more data, that means the file is not one of our tofu store entries, so we skip it
             file.read_exact(&mut [0])
                 .is_err_and(|e| e.kind() == std::io::ErrorKind::UnexpectedEof)
-                .then_some((name, hash))
+                .then_some((name, digest, validity))
         }
 
         std::fs::create_dir_all(dir)?;
         for entry in std::fs::read_dir(dir)? {
-            let Some((name, contents)) = parse_entry(entry) else {
+            let Some((name, digest, validity)) = parse_entry(entry) else {
                 continue;
             };
 
-            map.insert(name, contents);
+            map.insert(name, (digest, validity));
         }
         Ok(())
     }
+}
 
-    fn store(&self, cert: &CertificateDer, server_name: &ServerName<'_>) {
-        let hash = ring::digest::digest(&ring::digest::SHA256, cert);
-
-        let mut map = self.map.write().unwrap();
-        map.insert(server_name.to_owned(), hash.as_ref().try_into().unwrap());
-        drop(map);
+impl TofuServerCertStore for FilesystemTofuServerCertStore {
+    fn store_certificate(
+        &mut self,
+        digest: CertDigest,
+        validity: &Validity,
+        server_name: &ServerName<'_>,
+    ) {
+        self.map
+            .insert(server_name.to_owned(), (digest, validity.clone()));
 
         if std::fs::create_dir_all(&self.fs_path).is_err() {
+            // I/O error means this digest isn't persisted to disk.
+            // Not fatal because it's still stored in memory,
+            // so it will still work until the program is restarted
             return;
         }
 
@@ -181,35 +210,38 @@ impl FilesystemTofuServerCertStore {
         // - A valid DNS string, which is just ASCII letters, numbers and _-.
         let cert_file = self.fs_path.join(server_name.to_str().replace(':', "£"));
 
-        let _ = std::fs::write(cert_file, hash);
-    }
-}
-
-impl TofuServerCertStore for FilesystemTofuServerCertStore {
-    fn verify_server_cert(
-        &self,
-        end_entity: &CertificateDer,
-        server_name: &ServerName<'_>,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        let map = self.map.read().unwrap();
-        let Some(known_hash) = map.get(server_name) else {
-            // New server name
-            drop(map);
-            self.store(end_entity, server_name);
-            return Ok(ServerCertVerified::assertion());
+        let Ok(mut file) = std::fs::File::create(cert_file) else {
+            // Ignore result for same reason as above, I/O error is not fatal
+            return;
         };
 
-        let new_hash = ring::digest::digest(&ring::digest::SHA256, end_entity);
+        let not_before = validity.not_before.timestamp().to_le_bytes();
+        let not_after = validity.not_after.timestamp().to_le_bytes();
 
-        if known_hash == new_hash.as_ref() {
-            // Cert matches previous entry for this server name
-            Ok(ServerCertVerified::assertion())
-        } else {
-            // Cert does not match
-            Err(rustls::Error::InvalidCertificate(
-                CertificateError::ApplicationVerificationFailure,
-            ))
-        }
+        // If some of these writes fail then the file will be missing some data.
+        // This is fine because the parser only accepts files with the exact right amount of data,
+        // so the end result will be the same as the previous early returns
+        let _ = file.write_all(&digest);
+        let _ = file.write_all(&not_before);
+        let _ = file.write_all(&not_after);
+
+        // let mut buf = [0; CERT_DIGEST_LEN + 16];
+
+        // let (digest_buf, validity_buf) = buf.split_at_mut(CERT_DIGEST_LEN);
+        // digest_buf.copy_from_slice(&digest);
+
+        // let (not_before_buf, not_after_buf) = validity_buf.split_at_mut(8);
+        // not_before_buf.copy_from_slice(&not_before);
+        // not_after_buf.copy_from_slice(&not_after);
+
+        // let _ = file.write_all(&buf);
+    }
+
+    fn retrieve_certificate<'a, 'b: 'a>(
+        &'a self,
+        server_name: &ServerName<'b>,
+    ) -> Option<&'a (CertDigest, Validity)> {
+        self.map.get(server_name)
     }
 }
 
@@ -234,30 +266,30 @@ impl TofuServerCertStore for FilesystemTofuServerCertStore {
 #[derive(Debug)]
 pub struct SelfSignedTofuServerVerifier {
     supported_algs: WebPkiSupportedAlgorithms,
-    tofu_verifier: Arc<dyn TofuServerCertStore + Send + Sync>,
+    tofu_store: Arc<Mutex<dyn TofuServerCertStore + Send + Sync>>,
 }
 
 impl SelfSignedTofuServerVerifier {
-    /// Create a new self-signed server certificate verifier, using the specified trust-on-first-use implementation,
+    /// Create a new self-signed server certificate verifier, using the specified trust-on-first-use store implementation,
     /// and the [process-default `CryptoProvider`][CryptoProvider#using-the-per-process-default-cryptoprovider].
-    pub fn new(tofu_verifier: Arc<dyn TofuServerCertStore + Send + Sync>) -> Self {
+    pub fn new(tofu_store: Arc<Mutex<dyn TofuServerCertStore + Send + Sync>>) -> Self {
         Self {
             supported_algs: ::rustls::crypto::CryptoProvider::get_default()
                 .expect("no process-level CryptoProvider available -- call CryptoProvider::install_default() before this point")
                 .signature_verification_algorithms,
-            tofu_verifier,
+            tofu_store,
         }
     }
 
-    /// Create a new self-signed server certificate verifier, using the specified trust-on-first-use implementation,
+    /// Create a new self-signed server certificate verifier, using the specified trust-on-first-use store implementation,
     /// and the specified crypto provider.
     pub fn new_with_provider(
-        tofu_verifier: Arc<dyn TofuServerCertStore + Send + Sync>,
+        tofu_verifier: Arc<Mutex<dyn TofuServerCertStore + Send + Sync>>,
         provider: Arc<CryptoProvider>,
     ) -> Self {
         Self {
             supported_algs: provider.signature_verification_algorithms,
-            tofu_verifier,
+            tofu_store: tofu_verifier,
         }
     }
 }
@@ -294,8 +326,54 @@ impl ServerCertVerifier for SelfSignedTofuServerVerifier {
 
         ::rustls::client::verify_server_name(&parsed, server_name)?;
 
-        self.tofu_verifier
-            .verify_server_cert(end_entity, server_name)
+        // Neither rustls or webpki have any APIs that let you actually inspect the contents of the certificate,
+        // so we have to use an entirely different library here (`x509_parser`)
+        // to re-parse the certificate and read the validity information
+        let (remainder, parsed) = X509Certificate::from_der(end_entity)
+            .map_err(|e| CertificateError::Other(OtherError(Arc::new(e))))?;
+
+        if !remainder.is_empty() {
+            // Something went wrong with parsing
+            return Err(CertificateError::ApplicationVerificationFailure.into());
+        }
+
+        let digest = digest(end_entity);
+        let validity = parsed.validity();
+
+        let mut tofu_store = self.tofu_store.lock().unwrap();
+
+        let Some((old_digest, old_validity)) = tofu_store.retrieve_certificate(server_name) else {
+            // New server name that was not present in the store
+            // (This part is why this verification scheme is called 'trust-on-first-use')
+            tofu_store.store_certificate(digest, validity, server_name);
+            return Ok(ServerCertVerified::assertion());
+        };
+
+        // Convert from the rustls time type to the x509_parser time type
+        let now = now
+            .as_secs()
+            .try_into()
+            .map_err(|_| X509Error::InvalidDate)
+            .and_then(ASN1Time::from_timestamp)
+            .map_err(|e| CertificateError::Other(OtherError(Arc::new(e))))?;
+
+        // Check the validity of the stored certificate, so that servers can configure their certs to expire and renew,
+        // without our tofu store causing issues by holding onto an old expired cert forever
+        if old_validity.is_valid_at(now) {
+            // Stored certificate is still valid, compare the digests
+            if *old_digest == digest {
+                Ok(ServerCertVerified::assertion())
+            } else {
+                Err(rustls::Error::InvalidCertificate(
+                    CertificateError::ApplicationVerificationFailure,
+                ))
+            }
+        } else {
+            // Stored certificate is no longer valid, so replace it with the new certificate
+            // because we know the new one is currently valid
+            tofu_store.store_certificate(digest, validity, server_name);
+            Ok(ServerCertVerified::assertion())
+        }
     }
 
     fn verify_tls12_signature(

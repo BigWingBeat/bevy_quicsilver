@@ -8,7 +8,10 @@
 //! Note that usage of any protocol (version) other than TLS 1.3 does not conform to any
 //! published versions of the specification, and will not be supported in QUIC v1.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use quinn_proto::crypto::rustls::{NoInitialCipherSuite, QuicClientConfig, QuicServerConfig};
 
@@ -59,10 +62,10 @@ impl ClientConfigExt for quinn_proto::ClientConfig {
             ::rustls::ClientConfig::builder()
                 .dangerous()
                 .with_custom_certificate_verifier(Arc::new(SelfSignedTofuServerVerifier::new(
-                    Arc::new(
+                    Arc::new(Mutex::new(
                         FilesystemTofuServerCertStore::new(path)
                             .map_err(|e| ::rustls::OtherError(Arc::new(e)))?,
-                    ),
+                    )),
                 )))
                 .with_no_client_auth(),
         )
@@ -76,7 +79,7 @@ impl ClientConfigExt for quinn_proto::ClientConfig {
             ::rustls::ClientConfig::builder()
                 .dangerous()
                 .with_custom_certificate_verifier(Arc::new(SelfSignedTofuServerVerifier::new(
-                    Arc::new(tofu),
+                    Arc::new(Mutex::new(tofu)),
                 )))
                 .with_no_client_auth(),
         )
