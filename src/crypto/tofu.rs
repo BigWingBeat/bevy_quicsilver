@@ -34,7 +34,7 @@ fn digest(end_entity: &[u8]) -> CertDigest {
     ring::digest::digest(&ring::digest::SHA256, end_entity)
         .as_ref()
         .try_into()
-        .unwrap()
+        .expect("Ring produced a digest of the wrong length")
 }
 
 /// In-memory representation of the server name -> certificate digest mapping of the tofu cert store.
@@ -343,7 +343,9 @@ impl ServerCertVerifier for SelfSignedTofuServerVerifier {
         let digest = digest(end_entity);
         let validity = parsed.validity();
 
-        let mut tofu_store = self.tofu_store.lock().unwrap();
+        let Ok(mut tofu_store) = self.tofu_store.lock() else {
+            return Err(CertificateError::ApplicationVerificationFailure.into());
+        };
 
         let Some((old_digest, old_validity)) = tofu_store.retrieve_certificate(server_name) else {
             // New server name that was not present in the store
@@ -367,9 +369,7 @@ impl ServerCertVerifier for SelfSignedTofuServerVerifier {
             if *old_digest == digest {
                 Ok(ServerCertVerified::assertion())
             } else {
-                Err(rustls::Error::InvalidCertificate(
-                    CertificateError::ApplicationVerificationFailure,
-                ))
+                Err(CertificateError::ApplicationVerificationFailure.into())
             }
         } else {
             // Stored certificate is no longer valid, so replace it with the new certificate
