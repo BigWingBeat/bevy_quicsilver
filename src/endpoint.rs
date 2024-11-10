@@ -488,6 +488,12 @@ pub(crate) fn poll_endpoints(
     mut endpoint_query: Query<(Endpoint, Has<KeepAlive>)>,
     mut connection_query: Query<(Entity, &mut ConnectionImpl)>,
 ) {
+    // TODO: https://discord.com/channels/691052431525675048/747940465936040017/1284609471334580417
+    // Have this receive loop run in a dedicated thread, for more accurate timing information.
+    // Currently this is a normal system that runs once per frame, so there can be up to a whole frame of delay between
+    // data arriving in the socket and this system seeing it, causing the `now` instant to be slightly inaccurate.
+    // Having a dedicated thread would allow us to poll the socket way faster, or even use async to `await` on it.
+    // This would make `now` much more accurate, resulting in a better RTT estimate, and higher quality replication.
     let now = Instant::now();
     for (
         EndpointItem {
