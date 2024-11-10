@@ -24,8 +24,10 @@ use x509_parser::{
     time::ASN1Time,
 };
 
+/// Length in bytes of the certificate digest stored in the tofu cert store.
 pub const CERT_DIGEST_LEN: usize = ring::digest::SHA256_OUTPUT_LEN;
 
+/// The certificate digest stored in the tofu cert store.
 pub type CertDigest = [u8; CERT_DIGEST_LEN];
 
 fn digest(end_entity: &[u8]) -> CertDigest {
@@ -35,9 +37,10 @@ fn digest(end_entity: &[u8]) -> CertDigest {
         .unwrap()
 }
 
+/// In-memory representation of the server name -> certificate digest mapping of the tofu cert store.
 pub type TofuCertMap = HashMap<ServerName<'static>, (CertDigest, Validity)>;
 
-/// Handles storing and retrieving server certificate information for trust-on-first-use verification
+/// Handles storing and retrieving server certificate information for trust-on-first-use verification.
 pub trait TofuServerCertStore: Debug {
     /// Write the given certificate digest and validity information to the store,
     /// using the specified server name as the key.
@@ -56,19 +59,19 @@ pub trait TofuServerCertStore: Debug {
     ) -> Option<&'a (CertDigest, Validity)>;
 }
 
-/// Implements trust-on-first-use verification by storing previously seen certificate digests in memory
+/// Implements trust-on-first-use verification by storing previously seen certificate digests in memory.
 #[derive(Debug, Default)]
 pub struct InMemoryTofuServerCertStore {
     map: TofuCertMap,
 }
 
 impl InMemoryTofuServerCertStore {
-    /// Creates a new, empty in-memory cert store
+    /// Creates a new, empty in-memory cert store.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Creates a new cert store populated with the given server name -> cert digest mappings
+    /// Creates a new cert store populated with the given server name -> cert digest mappings.
     pub fn new_with_certs(certs: TofuCertMap) -> Self {
         Self { map: certs }
     }
@@ -260,7 +263,7 @@ impl TofuServerCertStore for FilesystemTofuServerCertStore {
 ///
 /// As a result, self-signed certificates do not tell you anything about the server, and are just a unique identifier.
 /// Trust-on-first-use verification works by associating the certificate with the domain name/IP address that was used to
-/// connect to the server (i.e. the server name), and comparing it on each subsequent connection.
+/// connect to the server (i.e. the server name), and comparing it on each subsequent connection to that server name.
 /// If the certificate is the same, that guarantees it's the same server. Otherwise, you may have connected to a different server.
 /// Note however that this guarantee no longer applies if the server's certificate gets stolen.
 #[derive(Debug)]

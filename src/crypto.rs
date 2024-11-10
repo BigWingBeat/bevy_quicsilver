@@ -98,11 +98,11 @@ impl ClientConfigExt for quinn_proto::ClientConfig {
     }
 }
 
-/// Extension trait to make it easier to provide a custom crypto config
+/// Extension trait to make it easier to provide a custom crypto config.
 pub trait ServerConfigExt: Sized {
     type RustlsConfig;
 
-    /// Create a server config from a custom rustls config
+    /// Create a server config from a custom rustls config.
     fn with_rustls_config(config: Self::RustlsConfig) -> Result<Self, NoInitialCipherSuite>;
 }
 
