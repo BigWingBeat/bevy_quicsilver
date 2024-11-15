@@ -43,14 +43,14 @@ fn main() -> AppExit {
         ))
         .init_state::<State>()
         .add_systems(Startup, (spawn_endpoint, connect_to_server).chain())
-        .observe(connecting_error)
-        .observe(connection_established)
-        .observe(connection_error)
+        .add_observer(connecting_error)
+        .add_observer(connection_established)
+        .add_observer(connection_error)
         .add_systems(OnEnter(State::SendDatagrams), send_datagrams)
         .add_systems(OnEnter(State::SpawnStreams), spawn_streams)
         .add_systems(Update, recv_stream.run_if(in_state(State::RecvStream)))
         .add_systems(OnEnter(State::Closing), close_connection)
-        .observe(exit_app)
+        .add_observer(exit_app)
         .run()
 }
 

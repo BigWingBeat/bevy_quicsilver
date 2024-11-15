@@ -18,10 +18,10 @@ impl Plugin for ClientPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ServerAddress>()
             .add_systems(OnEnter(AppState::Client), start_client)
-            .observe(endpoint_error)
-            .observe(connecting_error)
-            .observe(incoming_error)
-            .observe(connection_error);
+            .add_observer(endpoint_error)
+            .add_observer(connecting_error)
+            .add_observer(incoming_error)
+            .add_observer(connection_error);
     }
 }
 

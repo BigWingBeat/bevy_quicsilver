@@ -28,12 +28,12 @@ impl Plugin for ServerPlugin {
         app.init_resource::<EditPermissionMode>()
             .add_systems(OnEnter(AppState::Server), start_server)
             .add_systems(Update, poll_clients.run_if(in_state(AppState::Server)))
-            .observe(accept_connections)
-            .observe(endpoint_error)
-            .observe(connecting_error)
-            .observe(incoming_error)
-            .observe(connection_error)
-            .observe(on_connected);
+            .add_observer(accept_connections)
+            .add_observer(endpoint_error)
+            .add_observer(connecting_error)
+            .add_observer(incoming_error)
+            .add_observer(connection_error)
+            .add_observer(on_connected);
     }
 }
 

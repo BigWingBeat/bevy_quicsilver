@@ -4,8 +4,7 @@ use bevy::{
     color::palettes::tailwind::*, ecs::system::IntoObserverSystem, prelude::*, ui::FocusPolicy,
 };
 use bevy_simple_text_input::{
-    TextInput, TextInputInactive, TextInputPlaceholder, TextInputPlugin, TextInputTextStyle,
-    TextInputValue,
+    TextInput, TextInputInactive, TextInputPlaceholder, TextInputPlugin, TextInputValue,
 };
 use bevy_state::state::NextState;
 
@@ -26,8 +25,8 @@ impl Plugin for MenuPlugin {
             .insert_resource(WINDOW_BACKGROUND)
             .add_systems(Startup, spawn_menus)
             .add_systems(Update, (button, textinput_focus, textinput_change))
-            .observe(switch_menu_handler)
-            .observe(error_message);
+            .add_observer(switch_menu_handler)
+            .add_observer(error_message);
     }
 }
 

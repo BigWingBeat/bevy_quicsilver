@@ -32,10 +32,10 @@ fn main() -> AppExit {
         ))
         .add_systems(Startup, spawn_endpoint)
         .add_systems(Update, handle_clients)
-        .observe(accept_connections)
-        .observe(connecting_error)
-        .observe(connection_established)
-        .observe(connection_error)
+        .add_observer(accept_connections)
+        .add_observer(connecting_error)
+        .add_observer(connection_established)
+        .add_observer(connection_error)
         .run()
 }
 
