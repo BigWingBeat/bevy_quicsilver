@@ -9,7 +9,7 @@ use bevy_ecs::{
     event::{Event, EventReader},
     query::{QueryEntityError, QueryState},
     system::SystemState,
-    world::World,
+    world::{error::EntityFetchError, World},
 };
 use quinn_proto::{ConnectionError, ServerConfig};
 use thiserror::Error;
@@ -193,9 +193,13 @@ pub(crate) fn handle_incoming_responses(
         .collect::<Vec<_>>();
 
     for response in responses {
-        let Some(mut incoming_entity) = world.get_entity_mut(response.entity) else {
-            world.trigger_targets(IncomingError::MissingEntity, response.entity);
-            continue;
+        let mut incoming_entity = match world.get_entity_mut(response.entity) {
+            Ok(incoming_entity) => incoming_entity,
+            Err(EntityFetchError::NoSuchEntity(entity)) => {
+                world.trigger_targets(IncomingError::MissingEntity, entity);
+                continue;
+            }
+            Err(EntityFetchError::AliasedMutability(_)) => unreachable!(),
         };
 
         let incoming_entity_id = incoming_entity.id();
@@ -212,7 +216,9 @@ pub(crate) fn handle_incoming_responses(
         let result = incoming_entity.world_scope(|world| {
             let mut endpoint = match endpoints.get_mut(world, endpoint_entity) {
                 Ok(endpoint) => endpoint,
-                Err(QueryEntityError::QueryDoesNotMatch(_) | QueryEntityError::NoSuchEntity(_)) => {
+                Err(
+                    QueryEntityError::QueryDoesNotMatch(..) | QueryEntityError::NoSuchEntity(_),
+                ) => {
                     // If the endpoint does not exist anymore, neither should we
                     return Ok(None);
                 }
@@ -301,7 +307,7 @@ mod tests {
 
         app.world_mut().send_event(IncomingResponse::accept(entity));
 
-        app.observe(
+        app.add_observer(
             move |trigger: Trigger<IncomingError>, mut res: ResMut<HasObserverTriggered>| {
                 assert_eq!(trigger.entity(), entity);
                 assert!(matches!(trigger.event(), IncomingError::MissingEntity));
@@ -364,7 +370,7 @@ mod tests {
 
         app.update();
 
-        app.observe(test_observer::<NewIncoming, &Incoming>());
+        app.add_observer(test_observer::<NewIncoming, &Incoming>());
 
         app.update();
     }
@@ -401,6 +407,9 @@ mod tests {
 
         app.update();
 
-        assert!(app.world_mut().get_entity(connections.server).is_none());
+        assert!(app
+            .world_mut()
+            .get_entity(connections.server)
+            .is_err_and(|entity| entity == connections.server));
     }
 }

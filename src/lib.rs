@@ -50,15 +50,15 @@ pub mod query {
 pub struct KeepAlive;
 
 trait KeepAliveEntityCommandsExt {
-    fn remove_or_despawn<B: Bundle>(self, keepalive: bool) -> Self;
+    fn remove_or_despawn<B: Bundle>(&mut self, keepalive: bool);
 }
 
 impl KeepAliveEntityCommandsExt for EntityCommands<'_> {
-    fn remove_or_despawn<B: Bundle>(self, keepalive: bool) -> Self {
+    fn remove_or_despawn<B: Bundle>(&mut self, keepalive: bool) {
         if keepalive {
-            self.remove::<B>()
+            self.remove::<B>();
         } else {
-            self.despawn()
+            self.despawn();
         }
     }
 }
@@ -127,10 +127,10 @@ mod tests {
 
     pub(crate) fn app_no_errors() -> App {
         let mut app = app();
-        app.observe(panic_on_trigger::<EndpointError>)
-            .observe(panic_on_trigger::<ConnectingError>)
-            .observe(panic_on_trigger::<IncomingError>)
-            .observe(panic_on_trigger::<ConnectionError>);
+        app.add_observer(panic_on_trigger::<EndpointError>)
+            .add_observer(panic_on_trigger::<ConnectingError>)
+            .add_observer(panic_on_trigger::<IncomingError>)
+            .add_observer(panic_on_trigger::<ConnectionError>);
         app
     }
 
@@ -138,19 +138,19 @@ mod tests {
         let mut app = app();
         let t = TypeId::of::<T>();
         if t != TypeId::of::<EndpointError>() {
-            app.observe(panic_on_trigger::<EndpointError>);
+            app.add_observer(panic_on_trigger::<EndpointError>);
         }
 
         if t != TypeId::of::<ConnectingError>() {
-            app.observe(panic_on_trigger::<ConnectingError>);
+            app.add_observer(panic_on_trigger::<ConnectingError>);
         }
 
         if t != TypeId::of::<IncomingError>() {
-            app.observe(panic_on_trigger::<IncomingError>);
+            app.add_observer(panic_on_trigger::<IncomingError>);
         }
 
         if t != TypeId::of::<ConnectionError>() {
-            app.observe(panic_on_trigger::<ConnectionError>);
+            app.add_observer(panic_on_trigger::<ConnectionError>);
         }
         app
     }

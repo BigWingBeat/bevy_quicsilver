@@ -837,7 +837,7 @@ pub(crate) fn poll_connections(
                             .then_some(endpoint)
                     }
                     Err(
-                        QueryEntityError::QueryDoesNotMatch(_) | QueryEntityError::NoSuchEntity(_),
+                        QueryEntityError::QueryDoesNotMatch(..) | QueryEntityError::NoSuchEntity(_),
                     ) => {
                         // If the endpoint does not exist anymore, neither should we
                         None
@@ -1000,7 +1000,10 @@ mod tests {
             .contains::<ConnectionImpl>());
 
         // Client without keepalive should be despawned
-        assert!(app.world_mut().get_entity(connections.client).is_none());
+        assert!(app
+            .world_mut()
+            .get_entity(connections.client)
+            .is_err_and(|entity| entity == connections.client));
     }
 
     #[test]
@@ -1105,7 +1108,10 @@ mod tests {
         }
 
         // Connections should despawn after draining
-        assert!(app.world_mut().get_entity(server).is_none());
+        assert!(app
+            .world_mut()
+            .get_entity(server)
+            .is_err_and(|entity| entity == server));
     }
 
     #[test]

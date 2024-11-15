@@ -539,7 +539,7 @@ pub(crate) fn poll_endpoints(
                                 connections.remove(&handle);
                             }
                         }
-                        Err(QueryEntityError::QueryDoesNotMatch(connection_entity)) => {
+                        Err(QueryEntityError::QueryDoesNotMatch(connection_entity, _)) => {
                             endpoint.handle_event(handle, EndpointEvent::drained());
                             commands.trigger_targets(
                                 EndpointError::MalformedConnectionEntity(connection_entity),
@@ -710,12 +710,12 @@ mod tests {
         let mut app = app_no_errors();
         app.init_resource::<NewIncomingEntities>()
             .init_resource::<ConnectionEstablishedEntities>()
-            .observe(
+            .add_observer(
                 |trigger: Trigger<NewIncoming>, mut entities: ResMut<NewIncomingEntities>| {
                     entities.0.push(trigger.entity());
                 },
             )
-            .observe(
+            .add_observer(
                 |trigger: Trigger<ConnectionEstablished>,
                  mut entities: ResMut<ConnectionEstablishedEntities>| {
                     entities.0.push(trigger.entity())
