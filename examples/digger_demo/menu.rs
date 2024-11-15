@@ -4,7 +4,8 @@ use bevy::{
     color::palettes::tailwind::*, ecs::system::IntoObserverSystem, prelude::*, ui::FocusPolicy,
 };
 use bevy_simple_text_input::{
-    TextInput, TextInputInactive, TextInputPlaceholder, TextInputPlugin, TextInputValue,
+    TextInput, TextInputInactive, TextInputPlaceholder, TextInputPlugin, TextInputTextColor,
+    TextInputTextFont, TextInputValue,
 };
 use bevy_state::state::NextState;
 
@@ -114,13 +115,10 @@ fn spawn_host(world: &mut World) {
             spawn_textbox(parent, "Server Password...", copy_to_resource::<Password>);
 
             parent
-                .spawn(NodeBundle {
-                    style: Style {
-                        column_gap: Val::Px(50.0),
-                        align_items: AlignItems::Center,
-                        justify_content: JustifyContent::SpaceAround,
-                        ..default()
-                    },
+                .spawn(Node {
+                    column_gap: Val::Px(50.0),
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::SpaceAround,
                     ..default()
                 })
                 .with_children(|parent| {
@@ -210,16 +208,13 @@ fn spawn_game(world: &mut World) {
 
 fn spawn_root(world: &mut World, display: Display) -> EntityWorldMut {
     world.spawn((
-        NodeBundle {
-            style: Style {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::SpaceAround,
-                display,
-                ..default()
-            },
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::SpaceAround,
+            display,
             ..default()
         },
         Interaction::None,
@@ -233,27 +228,24 @@ fn spawn_textbox<B: Bundle, M>(
 ) {
     parent
         .spawn((
-            NodeBundle {
-                style: Style {
-                    width: Val::Px(500.0),
-                    padding: UiRect::axes(Val::Percent(0.9), Val::Percent(0.25)),
-                    ..default()
-                },
-                focus_policy: FocusPolicy::Block,
-                border_radius: BorderRadius::MAX,
-                border_color: BUTTON_BACKGROUND.into(),
-                background_color: BUTTON_BACKGROUND.into(),
+            Node {
+                width: Val::Px(500.0),
+                padding: UiRect::axes(Val::Percent(0.9), Val::Percent(0.25)),
                 ..default()
             },
+            FocusPolicy::Block,
+            BorderRadius::MAX,
+            BorderColor(BUTTON_BACKGROUND),
+            BackgroundColor(BUTTON_BACKGROUND),
             TextInput,
-            TextInputTextStyle(TextStyle {
+            TextInputTextFont(TextFont {
                 font_size: 40.0,
-                color: TEXT_COLOR,
                 ..default()
             }),
+            TextInputTextColor(TextColor(TEXT_COLOR)),
             TextInputPlaceholder {
                 value: placeholder.into(),
-                text_style: None,
+                ..default()
             },
             TextInputInactive(true),
         ))
@@ -265,17 +257,18 @@ fn spawn_text<'a>(
     text: impl Into<String>,
     font_size: f32,
 ) -> EntityWorldMut<'a> {
-    parent.spawn(
-        TextBundle::from_section(
-            text,
-            TextStyle {
-                font_size,
-                color: TEXT_COLOR,
-                ..default()
-            },
-        )
-        .with_text_justify(JustifyText::Center),
-    )
+    parent.spawn((
+        Text(text.into()),
+        TextFont {
+            font_size,
+            ..default()
+        },
+        TextColor(TEXT_COLOR),
+        TextLayout {
+            justify: JustifyText::Center,
+            ..default()
+        },
+    ))
 }
 
 fn spawn_button<'a, B: Bundle, M>(
@@ -283,25 +276,25 @@ fn spawn_button<'a, B: Bundle, M>(
     text: impl Into<String>,
     on_press: impl IntoObserverSystem<ButtonPress, B, M>,
 ) -> EntityWorldMut<'a> {
-    let mut e = parent.spawn(ButtonBundle {
-        style: Style {
+    let mut e = parent.spawn((
+        Button,
+        Node {
             justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
             padding: UiRect::axes(Val::Percent(0.9), Val::Percent(0.25)),
             ..default()
         },
-        border_radius: BorderRadius::MAX,
-        border_color: BUTTON_BACKGROUND.into(),
-        background_color: BUTTON_BACKGROUND.into(),
-        ..default()
-    });
-    e.with_child(TextBundle::from_section(
-        text,
-        TextStyle {
+        BorderRadius::MAX,
+        BorderColor(BUTTON_BACKGROUND),
+        BackgroundColor(BUTTON_BACKGROUND),
+    ));
+    e.with_child((
+        Text(text.into()),
+        TextFont {
             font_size: 40.0,
-            color: TEXT_COLOR,
             ..default()
         },
+        TextColor(TEXT_COLOR),
     ))
     .observe(on_press);
     e
@@ -309,12 +302,12 @@ fn spawn_button<'a, B: Bundle, M>(
 
 fn switch_menu_handler(
     trigger: Trigger<SwitchMenu>,
-    mut style: Query<&mut Style>,
+    mut node: Query<&mut Node>,
     mut current_menu: ResMut<CurrentMenu>,
 ) {
     let &SwitchMenu { from, to } = trigger.event();
-    style.get_mut(from).unwrap().display = Display::None;
-    style.get_mut(to).unwrap().display = Display::Flex;
+    node.get_mut(from).unwrap().display = Display::None;
+    node.get_mut(to).unwrap().display = Display::Flex;
     current_menu.0 = to;
 }
 
@@ -387,13 +380,5 @@ fn error_message(
     });
 
     let mut text = query.get_mut(error_text.0).unwrap();
-    text.sections.clear();
-    text.sections.push(TextSection::new(
-        trigger.event().0.to_string(),
-        TextStyle {
-            font_size: TITLE_TEXT_SIZE,
-            color: TEXT_COLOR,
-            ..default()
-        },
-    ));
+    text.0 = trigger.event().0.to_string();
 }
