@@ -10,9 +10,9 @@ keywords = ["bevy", "quic", "gamedev", "networking"]
 categories = ["game-development", "network-programming"]
 
 [dependencies]
-bevy_app = { git = "https://github.com/BigWingBeat/bevy", branch = "ui_compile_error", default-features = false }
-bevy_ecs = { git = "https://github.com/BigWingBeat/bevy", branch = "ui_compile_error", default-features = false }
-bevy_time = { git = "https://github.com/BigWingBeat/bevy", branch = "ui_compile_error", default-features = false }
+bevy_app = { version = "0.15.0-rc.1", default-features = false }
+bevy_ecs = { version = "0.15.0-rc.1", default-features = false }
+bevy_time = { version = "0.15.0-rc.1", default-features = false }
 hashbrown = "0.14"
 bytes = "1.6"
 thiserror = "1.0"
@@ -35,27 +35,25 @@ directories = "5.0"
 rustls-platform-verifier = "0.4"
 
 # For client & server examples
-bevy_state = { git = "https://github.com/BigWingBeat/bevy", branch = "ui_compile_error", default-features = false, features = [
-	"bevy_app",
-] }
+bevy_state = { version = "0.15.0-rc.1", default-features = false, features = ["bevy_app"] }
 
 # For digger demo example
-bevy = { git = "https://github.com/BigWingBeat/bevy", branch = "ui_compile_error", default-features = false, features = [
+bevy = { version = "0.15.0-rc.1", default-features = false, features = [
 	"x11",
 	"bevy_winit",
 	"bevy_ui",
 	"bevy_state",
 	"default_font",
 ] }
-bevy_simple_text_input = { git = "https://github.com/rparrett/bevy_simple_text_input", branch = "bevy_main" }
+bevy_simple_text_input = { git = "https://github.com/rparrett/bevy_simple_text_input", branch = "bevy-0.15" }
 # bevy_ecs_tilemap = { path = "../../bevy_ecs_tilemap" }
 anyhow = "1.0"
 bincode = "1.3"
 bytes-utils = "0.1"
 serde = "1.0"
 
-[patch."https://github.com/bevyengine/bevy"]
-bevy = { git = "https://github.com/BigWingBeat/bevy", branch = "ui_compile_error" }
+# [patch."https://github.com/bevyengine/bevy"]
+# bevy = { git = "https://github.com/BigWingBeat/bevy", branch = "v0.15.0-rc.1" }
 # bevy = { path = "../bevy" }
 
 # [patch."https://github.com/BigWingBeat/bevy"]
