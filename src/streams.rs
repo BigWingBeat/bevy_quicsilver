@@ -12,7 +12,7 @@ pub struct SendStream<'a> {
     pub(crate) proto_stream: quinn_proto::SendStream<'a>,
 }
 
-impl<'a> SendStream<'a> {
+impl SendStream<'_> {
     /// Get the ID of the stream.
     pub fn id(&self) -> StreamId {
         self.id
@@ -228,7 +228,7 @@ impl Drop for Chunks<'_> {
     }
 }
 
-impl<'a> RecvStream<'a> {
+impl RecvStream<'_> {
     /// Get the ID of the stream.
     pub fn id(&self) -> StreamId {
         self.id

@@ -34,7 +34,7 @@ fn main() -> AppExit {
 }
 
 fn startup(world: &mut World) {
-    world.spawn(Camera2dBundle::default());
+    world.spawn(Camera2d);
 }
 
 #[derive(States, Default, Debug, Hash, PartialEq, Eq, Clone)]
