@@ -1,4 +1,8 @@
-use std::{net::SocketAddr, sync::Arc, time::Instant};
+use std::{
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
 use bevy_ecs::{
     bundle::Bundle,
@@ -8,6 +12,7 @@ use bevy_ecs::{
     query::{Has, QueryData, QueryEntityError},
     system::{Commands, Query},
 };
+use crossbeam_channel::Receiver;
 use hashbrown::HashMap;
 use quinn_proto::{
     AcceptError, ClientConfig, ConnectError, ConnectionError, ConnectionEvent, ConnectionHandle,
@@ -18,7 +23,7 @@ use thiserror::Error;
 use crate::{
     connection::{ConnectingBundle, ConnectionImpl},
     incoming::Incoming,
-    socket::UdpSocket,
+    socket::{UdpSocket, UdpSocketRecvDriver},
     KeepAlive, KeepAliveEntityCommandsExt,
 };
 
@@ -276,10 +281,11 @@ impl EndpointReadOnlyItem<'_> {
 /// Underlying component type behind the [`EndpointBundle`] bundle and [`Endpoint`] querydata types.
 #[derive(Debug, Component)]
 pub(crate) struct EndpointImpl {
-    endpoint: quinn_proto::Endpoint,
+    endpoint: Arc<Mutex<quinn_proto::Endpoint>>,
     default_client_config: Option<ClientConfig>,
     pub(crate) connections: HashMap<ConnectionHandle, Entity>,
-    socket: UdpSocket,
+    socket: Arc<UdpSocket>,
+    receiver: Receiver<Result<crate::socket::DatagramEvent, std::io::Error>>,
     ipv6: bool,
 }
 
@@ -335,17 +341,38 @@ impl EndpointImpl {
         rng_seed: Option<[u8; 32]>,
     ) -> std::io::Result<Self> {
         let ipv6 = socket.local_addr()?.is_ipv6();
-        UdpSocket::new(socket, config.get_max_udp_payload_size()).map(|socket| Self {
-            endpoint: quinn_proto::Endpoint::new(
+        UdpSocket::new(socket).map(|socket| {
+            let socket = Arc::new(socket);
+
+            let max_udp_payload_size = config.get_max_udp_payload_size();
+
+            let endpoint = Arc::new(Mutex::new(quinn_proto::Endpoint::new(
                 Arc::new(config),
                 server_config.map(Arc::new),
                 !socket.may_fragment(),
                 rng_seed,
-            ),
-            default_client_config,
-            connections: HashMap::default(),
-            socket,
-            ipv6,
+            )));
+
+            let (sender, receiver) = crossbeam_channel::bounded(32);
+
+            // Receiving data is done in a dedicated task to minimize latency between data arriving and being processed
+            let driver = UdpSocketRecvDriver::new(
+                socket.clone(),
+                max_udp_payload_size,
+                endpoint.clone(),
+                sender,
+            );
+
+            bevy_tasks::IoTaskPool::get().spawn(driver).detach();
+
+            Self {
+                endpoint,
+                default_client_config,
+                connections: HashMap::default(),
+                socket,
+                receiver,
+                ipv6,
+            }
         })
     }
 
@@ -354,7 +381,10 @@ impl EndpointImpl {
         connection: ConnectionHandle,
         event: EndpointEvent,
     ) -> Option<ConnectionEvent> {
-        self.endpoint.handle_event(connection, event)
+        self.endpoint
+            .lock()
+            .unwrap()
+            .handle_event(connection, event)
     }
 
     fn connect(
@@ -400,6 +430,8 @@ impl EndpointImpl {
         };
 
         self.endpoint
+            .lock()
+            .unwrap()
             .connect(now, client_config, server_address, server_name)
             .map(|(handle, connection)| {
                 ConnectingBundle::new(ConnectionImpl::new(self_entity, handle, connection))
@@ -413,6 +445,8 @@ impl EndpointImpl {
     ) -> Result<(ConnectionHandle, quinn_proto::Connection), ConnectionError> {
         let mut response_buffer = Vec::new();
         self.endpoint
+            .lock()
+            .unwrap()
             .accept(
                 incoming,
                 Instant::now(),
@@ -429,19 +463,25 @@ impl EndpointImpl {
 
     fn refuse(&mut self, incoming: quinn_proto::Incoming) {
         let mut response_buffer = Vec::new();
-        let transmit = self.endpoint.refuse(incoming, &mut response_buffer);
+        let transmit = self
+            .endpoint
+            .lock()
+            .unwrap()
+            .refuse(incoming, &mut response_buffer);
         self.send_response(&transmit, &response_buffer);
     }
 
     fn retry(&mut self, incoming: quinn_proto::Incoming) -> Result<(), RetryError> {
         let mut response_buffer = Vec::new();
         self.endpoint
+            .lock()
+            .unwrap()
             .retry(incoming, &mut response_buffer)
             .map(|transmit| self.send_response(&transmit, &response_buffer))
     }
 
     fn ignore(&mut self, incoming: quinn_proto::Incoming) {
-        self.endpoint.ignore(incoming);
+        self.endpoint.lock().unwrap().ignore(incoming);
     }
 
     /// Internal method for endpoint-generated data, which can safely ignore the Result
@@ -463,7 +503,10 @@ impl EndpointImpl {
     }
 
     fn set_server_config(&mut self, server_config: Option<ServerConfig>) {
-        self.endpoint.set_server_config(server_config.map(Arc::new));
+        self.endpoint
+            .lock()
+            .unwrap()
+            .set_server_config(server_config.map(Arc::new));
     }
 
     fn rebind(&mut self, _new_socket: std::net::UdpSocket) -> std::io::Result<()> {
@@ -488,13 +531,6 @@ pub(crate) fn poll_endpoints(
     mut endpoint_query: Query<(Endpoint, Has<KeepAlive>)>,
     mut connection_query: Query<(Entity, &mut ConnectionImpl)>,
 ) {
-    // TODO: https://discord.com/channels/691052431525675048/747940465936040017/1284609471334580417
-    // Have this receive loop run in a dedicated thread, for more accurate timing information.
-    // Currently this is a normal system that runs once per frame, so there can be up to a whole frame of delay between
-    // data arriving in the socket and this system seeing it, causing the `now` instant to be slightly inaccurate.
-    // Having a dedicated thread would allow us to poll the socket way faster, or even use async to `await` on it.
-    // This would make `now` much more accurate, resulting in a better RTT estimate, and higher quality replication.
-    let now = Instant::now();
     for (
         EndpointItem {
             entity: endpoint_entity,
@@ -507,72 +543,71 @@ pub(crate) fn poll_endpoints(
             endpoint,
             default_client_config: _,
             connections,
-            socket,
+            socket: _,
+            receiver,
             ipv6: _,
         } = &mut *endpoint_impl;
 
         let mut transmits = Vec::new();
 
-        if let Err(error) = socket.receive(|meta, data| {
-            let mut response_buffer = Vec::new();
-            match endpoint.handle(
-                now,
-                meta.addr,
-                meta.dst_ip,
-                meta.ecn.map(proto_ecn),
-                data,
-                &mut response_buffer,
-            ) {
-                Some(DatagramEvent::ConnectionEvent(handle, event)) => {
-                    let &connection_entity = connections
-                        .get(&handle)
-                        .expect("ConnectionHandle {handle:?} is missing Entity mapping");
+        let mut endpoint = endpoint.lock().unwrap();
+        for event in receiver.try_iter() {
+            match event {
+                Ok(event) => match event.event {
+                    DatagramEvent::ConnectionEvent(handle, event) => {
+                        let &connection_entity = connections
+                            .get(&handle)
+                            .expect("ConnectionHandle {handle:?} is missing Entity mapping");
 
-                    match connection_query.get_mut(connection_entity) {
-                        Ok((_, mut connection)) => {
-                            if connection.handle == handle && connection.endpoint == endpoint_entity
-                            {
-                                connection.handle_event(event);
-                            } else {
-                                // A new connection was inserted onto the entity, overwriting the previous connection
-                                endpoint.handle_event(handle, EndpointEvent::drained());
-                                connections.remove(&handle);
+                        match connection_query.get_mut(connection_entity) {
+                            Ok((_, mut connection)) => {
+                                if connection.handle == handle
+                                    && connection.endpoint == endpoint_entity
+                                {
+                                    connection.handle_event(event);
+                                } else {
+                                    // A new connection was inserted onto the entity, overwriting the previous connection
+                                    endpoint.handle_event(handle, EndpointEvent::drained());
+                                    connections.remove(&handle);
+                                }
                             }
+                            Err(QueryEntityError::QueryDoesNotMatch(connection_entity, _)) => {
+                                endpoint.handle_event(handle, EndpointEvent::drained());
+                                commands.trigger_targets(
+                                    EndpointError::MalformedConnectionEntity(connection_entity),
+                                    endpoint_entity,
+                                );
+                            }
+                            Err(QueryEntityError::NoSuchEntity(connection_entity)) => {
+                                endpoint.handle_event(handle, EndpointEvent::drained());
+                                commands.trigger_targets(
+                                    EndpointError::MissingConnectionEntity(connection_entity),
+                                    endpoint_entity,
+                                );
+                            }
+                            Err(QueryEntityError::AliasedMutability(_)) => unreachable!(),
                         }
-                        Err(QueryEntityError::QueryDoesNotMatch(connection_entity, _)) => {
-                            endpoint.handle_event(handle, EndpointEvent::drained());
-                            commands.trigger_targets(
-                                EndpointError::MalformedConnectionEntity(connection_entity),
-                                endpoint_entity,
-                            );
-                        }
-                        Err(QueryEntityError::NoSuchEntity(connection_entity)) => {
-                            endpoint.handle_event(handle, EndpointEvent::drained());
-                            commands.trigger_targets(
-                                EndpointError::MissingConnectionEntity(connection_entity),
-                                endpoint_entity,
-                            );
-                        }
-                        Err(QueryEntityError::AliasedMutability(_)) => unreachable!(),
                     }
+                    DatagramEvent::NewConnection(incoming) => {
+                        commands.spawn(Incoming {
+                            incoming,
+                            endpoint_entity,
+                        });
+                    }
+                    DatagramEvent::Response(transmit) => {
+                        transmits.push((transmit, event.response_buffer));
+                    }
+                },
+                Err(e) => {
+                    commands.trigger_targets(EndpointError::IoError(e), endpoint_entity);
+                    commands
+                        .entity(endpoint_entity)
+                        .remove_or_despawn::<EndpointImpl>(keepalive);
                 }
-                Some(DatagramEvent::NewConnection(incoming)) => {
-                    commands.spawn(Incoming {
-                        incoming,
-                        endpoint_entity,
-                    });
-                }
-                Some(DatagramEvent::Response(transmit)) => {
-                    transmits.push((transmit, response_buffer));
-                }
-                None => {}
             }
-        }) {
-            commands.trigger_targets(EndpointError::IoError(error), endpoint_entity);
-            commands
-                .entity(endpoint_entity)
-                .remove_or_despawn::<EndpointImpl>(keepalive);
         }
+
+        drop(endpoint);
 
         for (transmit, buffer) in transmits {
             endpoint_impl.send_response(&transmit, &buffer);
@@ -586,15 +621,6 @@ fn udp_ecn(ecn: quinn_proto::EcnCodepoint) -> quinn_udp::EcnCodepoint {
         quinn_proto::EcnCodepoint::Ect0 => quinn_udp::EcnCodepoint::Ect0,
         quinn_proto::EcnCodepoint::Ect1 => quinn_udp::EcnCodepoint::Ect1,
         quinn_proto::EcnCodepoint::Ce => quinn_udp::EcnCodepoint::Ce,
-    }
-}
-
-#[inline]
-fn proto_ecn(ecn: quinn_udp::EcnCodepoint) -> quinn_proto::EcnCodepoint {
-    match ecn {
-        quinn_udp::EcnCodepoint::Ect0 => quinn_proto::EcnCodepoint::Ect0,
-        quinn_udp::EcnCodepoint::Ect1 => quinn_proto::EcnCodepoint::Ect1,
-        quinn_udp::EcnCodepoint::Ce => quinn_proto::EcnCodepoint::Ce,
     }
 }
 

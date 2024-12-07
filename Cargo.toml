@@ -13,6 +13,9 @@ categories = ["game-development", "network-programming"]
 bevy_app = { version = "0.15", default-features = false }
 bevy_ecs = { version = "0.15", default-features = false }
 bevy_time = { version = "0.15", default-features = false }
+bevy_tasks = { version = "0.15", default-features = false, features = ["async-io"] }
+async-io = "2.4"
+crossbeam-channel = "0.5"
 hashbrown = "0.15"
 bytes = "1.9"
 thiserror = "2.0"
