@@ -16,7 +16,7 @@ use thiserror::Error;
 
 use crate::{connection::ConnectionAccepted, endpoint::Endpoint, Connecting, KeepAlive};
 
-/// An observer trigger that is fired whenever an [`Incoming`] entity encounters an error.
+/// An observer trigger that is fired whenever an [`Incoming`] component on an entity encounters an error.
 #[derive(Debug, Error, Event)]
 pub enum IncomingError {
     /// An [`IncomingResponse`] event was raised for an entity that does not have an [`Incoming`] component
@@ -133,8 +133,8 @@ impl IncomingResponse {
 /// ```
 #[derive(Debug)]
 pub struct Incoming {
-    pub(crate) incoming: quinn_proto::Incoming,
-    pub(crate) endpoint_entity: Entity,
+    incoming: quinn_proto::Incoming,
+    endpoint_entity: Entity,
 }
 
 impl Component for Incoming {
@@ -148,6 +148,13 @@ impl Component for Incoming {
 }
 
 impl Incoming {
+    pub(crate) fn new(incoming: quinn_proto::Incoming, endpoint_entity: Entity) -> Self {
+        Self {
+            incoming,
+            endpoint_entity,
+        }
+    }
+
     /// The local IP address which was used when the peer established the connection.
     ///
     /// This can be different from the address the endpoint is bound to, in case

@@ -288,7 +288,7 @@ impl SelfSignedTofuServerVerifier {
     /// and the specified crypto provider.
     pub fn new_with_provider(
         tofu_verifier: Arc<Mutex<dyn TofuServerCertStore + Send + Sync>>,
-        provider: Arc<CryptoProvider>,
+        provider: &CryptoProvider,
     ) -> Self {
         Self {
             supported_algs: provider.signature_verification_algorithms,
@@ -340,12 +340,12 @@ impl ServerCertVerifier for SelfSignedTofuServerVerifier {
             return Err(CertificateError::ApplicationVerificationFailure.into());
         }
 
-        let digest = digest(end_entity);
-        let validity = parsed.validity();
-
         let Ok(mut tofu_store) = self.tofu_store.lock() else {
             return Err(CertificateError::ApplicationVerificationFailure.into());
         };
+
+        let digest = digest(end_entity);
+        let validity = parsed.validity();
 
         let Some((old_digest, old_validity)) = tofu_store.retrieve_certificate(server_name) else {
             // New server name that was not present in the store

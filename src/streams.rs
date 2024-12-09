@@ -5,14 +5,28 @@ use quinn_proto::{
 };
 use thiserror::Error;
 
+// TODO: impl Read & Write
+
 /// A stream that can be used to send data.
 pub struct SendStream<'a> {
-    pub(crate) id: StreamId,
-    pub(crate) write_buffer: &'a mut Vec<Bytes>,
-    pub(crate) proto_stream: quinn_proto::SendStream<'a>,
+    id: StreamId,
+    write_buffer: &'a mut Vec<Bytes>,
+    proto_stream: quinn_proto::SendStream<'a>,
 }
 
-impl SendStream<'_> {
+impl<'a> SendStream<'a> {
+    pub(crate) fn new(
+        id: StreamId,
+        write_buffer: &'a mut Vec<Bytes>,
+        proto_stream: quinn_proto::SendStream<'a>,
+    ) -> Self {
+        Self {
+            id,
+            write_buffer,
+            proto_stream,
+        }
+    }
+
     /// Get the ID of the stream.
     pub fn id(&self) -> StreamId {
         self.id
@@ -160,8 +174,8 @@ impl SendStream<'_> {
 /// bidirectional stream 1, the first stream returned by [`Connection::accept_bi`](crate::query::ConnectionItem::accept_bi) on the receiver
 /// will be bidirectional stream 0.
 pub struct RecvStream<'a> {
-    pub(crate) id: StreamId,
-    pub(crate) proto_stream: quinn_proto::RecvStream<'a>,
+    id: StreamId,
+    proto_stream: quinn_proto::RecvStream<'a>,
 }
 
 /// Errors that can occur when reading data from a [`RecvStream`].
@@ -228,7 +242,11 @@ impl Drop for Chunks<'_> {
     }
 }
 
-impl RecvStream<'_> {
+impl<'a> RecvStream<'a> {
+    pub(crate) fn new(id: StreamId, proto_stream: quinn_proto::RecvStream<'a>) -> Self {
+        Self { id, proto_stream }
+    }
+
     /// Get the ID of the stream.
     pub fn id(&self) -> StreamId {
         self.id

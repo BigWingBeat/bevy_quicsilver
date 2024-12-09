@@ -116,7 +116,7 @@ impl ServerConfigExt for quinn_proto::ServerConfig {
     }
 }
 
-/// A ServerCertVerifier that wraps two other verifiers.
+/// A `ServerCertVerifier` that wraps two other verifiers.
 /// It attempts to verify with `default`, and if that returns an error, it verifies with `fallback` instead.
 #[derive(Debug)]
 pub struct FallbackVerifier<T, F> {

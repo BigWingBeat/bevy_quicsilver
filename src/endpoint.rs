@@ -146,7 +146,7 @@ impl EndpointBundle {
 #[query_data(mutable)]
 pub struct Endpoint {
     entity: Entity,
-    pub(crate) endpoint: &'static mut EndpointImpl,
+    endpoint: &'static mut EndpointImpl,
 }
 
 impl EndpointItem<'_> {
@@ -252,6 +252,14 @@ impl EndpointItem<'_> {
     ) -> std::io::Result<()> {
         self.endpoint.send(transmit, buffer)
     }
+
+    pub(crate) fn knows_connection(&self, connection: ConnectionHandle) -> bool {
+        self.endpoint.knows_connection(connection)
+    }
+
+    pub(crate) fn connection_inserted(&mut self, connection: ConnectionHandle, entity: Entity) {
+        self.endpoint.connection_inserted(connection, entity);
+    }
 }
 
 impl EndpointReadOnlyItem<'_> {
@@ -279,11 +287,16 @@ impl EndpointReadOnlyItem<'_> {
     ) -> std::io::Result<()> {
         self.endpoint.send(transmit, buffer)
     }
+
+    #[expect(dead_code)]
+    pub(crate) fn knows_connection(&self, connection: ConnectionHandle) -> bool {
+        self.endpoint.knows_connection(connection)
+    }
 }
 
 /// Underlying component type behind the [`EndpointBundle`] bundle and [`Endpoint`] querydata types.
 #[derive(Debug, Component)]
-pub(crate) struct EndpointImpl {
+struct EndpointImpl {
     endpoint: Arc<Mutex<quinn_proto::Endpoint>>,
     default_client_config: Option<ClientConfig>,
     connections: HashMap<ConnectionHandle, Entity>,
@@ -381,8 +394,7 @@ impl EndpointImpl {
         })
     }
 
-    // TODO: privacy
-    pub(crate) fn handle_event(
+    fn handle_event(
         &mut self,
         connection: ConnectionHandle,
         event: EndpointEvent,
@@ -393,11 +405,11 @@ impl EndpointImpl {
             .handle_event(connection, event)
     }
 
-    pub(crate) fn knows_connection(&self, connection: ConnectionHandle) -> bool {
+    fn knows_connection(&self, connection: ConnectionHandle) -> bool {
         self.connections.contains_key(&connection)
     }
 
-    pub(crate) fn connection_inserted(&mut self, connection: ConnectionHandle, entity: Entity) {
+    fn connection_inserted(&mut self, connection: ConnectionHandle, entity: Entity) {
         self.connections.insert(connection, entity);
     }
 
@@ -428,7 +440,7 @@ impl EndpointImpl {
         match server_address {
             SocketAddr::V4(addr) if self.ipv6 => {
                 // Local socket bound to IPv6, convert target IPv4 address to mapped IPv6
-                server_address = (addr.ip().to_ipv6_mapped(), addr.port()).into()
+                server_address = (addr.ip().to_ipv6_mapped(), addr.port()).into();
             }
             SocketAddr::V6(addr) if !self.ipv6 => {
                 // Local socket bound to IPv4
@@ -502,11 +514,7 @@ impl EndpointImpl {
         let _ = self.send(transmit, buffer);
     }
 
-    pub(crate) fn send(
-        &self,
-        transmit: &quinn_proto::Transmit,
-        buffer: &[u8],
-    ) -> std::io::Result<()> {
+    fn send(&self, transmit: &quinn_proto::Transmit, buffer: &[u8]) -> std::io::Result<()> {
         self.socket.send(&udp_transmit(transmit, buffer))
     }
 
@@ -533,7 +541,7 @@ impl EndpointImpl {
         self.connections.len()
     }
 
-    pub(crate) fn max_gso_segments(&self) -> usize {
+    fn max_gso_segments(&self) -> usize {
         self.socket.max_gso_segments()
     }
 }
@@ -602,10 +610,7 @@ pub(crate) fn poll_endpoints(
                         }
                     }
                     DatagramEvent::NewConnection(incoming) => {
-                        commands.spawn(Incoming {
-                            incoming,
-                            endpoint_entity,
-                        });
+                        commands.spawn(Incoming::new(incoming, endpoint_entity));
                     }
                     DatagramEvent::Response(transmit) => {
                         transmits.push((transmit, event.response_buffer));

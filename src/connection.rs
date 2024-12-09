@@ -16,7 +16,7 @@ use quinn_proto::{
 use thiserror::Error;
 
 use crate::{
-    endpoint::{Endpoint, EndpointImpl},
+    endpoint::Endpoint,
     streams::{RecvStream, SendStream},
     KeepAlive, KeepAliveEntityCommandsExt,
 };
@@ -27,7 +27,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// An observer trigger that is fired whenever a [`Connecting`] entity encounters an error.
+/// An observer trigger that is fired whenever a [`Connecting`] component on an entity encounters an error.
 #[derive(Debug, Error, bevy_ecs::event::Event)]
 pub enum ConnectingError {
     /// The connection was lost
@@ -38,7 +38,7 @@ pub enum ConnectingError {
     IoError(std::io::Error),
 }
 
-/// An observer trigger that is fired whenever a [`Connection`] entity encounters an error.
+/// An observer trigger that is fired whenever a [`Connection`] component on an entity encounters an error.
 #[derive(Debug, Error, bevy_ecs::event::Event)]
 pub enum ConnectionError {
     /// The connection was lost
@@ -50,12 +50,12 @@ pub enum ConnectionError {
 }
 
 /// An observer trigger that is fired when a new incoming connection is accepted,
-/// and has been changed from an [`Incoming`](crate::Incoming) entity to a [`Connecting`] entity.
+/// and the [`Incoming`](crate::Incoming) component on the entity has been replaced with a [`Connecting`] component.
 #[derive(Debug, bevy_ecs::event::Event)]
 pub struct ConnectionAccepted;
 
 /// An observer trigger that is fired when a connection is successfully established,
-/// and has been changed from a [`Connecting`] entity to a [`Connection`] entity.
+/// and the [`Connecting`] component on the entity has been replaced with a [`Connection`] component.
 #[derive(Debug, bevy_ecs::event::Event)]
 pub struct ConnectionEstablished;
 
@@ -63,7 +63,7 @@ pub struct ConnectionEstablished;
 #[derive(Debug, bevy_ecs::event::Event)]
 pub struct ConnectionDrained;
 
-/// An observer trigger that is fired when a [`Connecting`] entity's handshake data becomes available.
+/// An observer trigger that is fired when a connection's handshake data becomes available.
 /// After this trigger is fired, [`Connecting::handshake_data()`](ConnectingItem::handshake_data) will begin returning [`Some`].
 #[derive(Debug, bevy_ecs::event::Event)]
 pub struct HandshakeDataReady;
@@ -506,11 +506,7 @@ impl ConnectionImpl {
         self.should_poll = true;
         self.connection.streams().open(Dir::Uni).map(|id| {
             let write_buffer = self.pending_streams.entry(id).or_default();
-            SendStream {
-                id,
-                write_buffer,
-                proto_stream: self.connection.send_stream(id),
-            }
+            SendStream::new(id, write_buffer, self.connection.send_stream(id))
         })
     }
 
@@ -526,10 +522,7 @@ impl ConnectionImpl {
         self.connection
             .streams()
             .accept(Dir::Uni)
-            .map(|id| RecvStream {
-                id,
-                proto_stream: self.connection.recv_stream(id),
-            })
+            .map(|id| RecvStream::new(id, self.connection.recv_stream(id)))
     }
 
     fn accept_bi(&mut self) -> Option<StreamId> {
@@ -544,21 +537,14 @@ impl ConnectionImpl {
         self.pending_streams
             .get_mut(&id)
             .filter(|_| id.dir() == Dir::Bi || id.initiator() == self.connection.side())
-            .map(|write_buffer| SendStream {
-                id,
-                write_buffer,
-                proto_stream: self.connection.send_stream(id),
-            })
+            .map(|write_buffer| SendStream::new(id, write_buffer, self.connection.send_stream(id)))
             .ok_or_else(ClosedStream::new)
     }
 
     fn recv_stream(&mut self, id: StreamId) -> Result<RecvStream<'_>, ClosedStream> {
         self.should_poll = true;
         (id.dir() == Dir::Bi || id.initiator() != self.connection.side())
-            .then(|| RecvStream {
-                id,
-                proto_stream: self.connection.recv_stream(id),
-            })
+            .then(|| RecvStream::new(id, self.connection.recv_stream(id)))
             .ok_or_else(ClosedStream::new)
     }
 
@@ -727,7 +713,8 @@ impl ConnectionImpl {
         // Bookkeeping so the endpoint knows the entity we're on
         let this = this(&world);
         let handle = this.handle;
-        let Some(mut endpoint) = world.get_mut::<EndpointImpl>(this.endpoint) else {
+
+        let Some(mut endpoint) = world.get_mut::<Endpoint>(this.endpoint) else {
             return;
         };
         endpoint.connection_inserted(handle, entity);
@@ -754,7 +741,6 @@ pub(crate) fn poll_connections(
                     Ok(endpoint) => {
                         // Return None if the endpoint was replaced with a new one
                         endpoint
-                            .endpoint
                             .knows_connection(connection.handle)
                             .then_some(endpoint)
                     }
