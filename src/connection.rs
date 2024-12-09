@@ -79,7 +79,7 @@ pub struct HandshakeDataReady;
 /// ```
 /// # use bevy_ecs::system::{Query, assert_is_system};
 /// # use bevy_quicsilver::Connecting;
-/// fn my_system(query: Query<Connecting>) {
+/// fn my_system(query: Query<&Connecting>) {
 ///     for connecting in query.iter() {
 ///         println!("Connecting to: {}", connecting.remote_address());
 ///     }
@@ -158,7 +158,7 @@ impl Connecting {
 /// ```
 /// # use bevy_ecs::system::{Query, assert_is_system};
 /// # use bevy_quicsilver::Connection;
-/// fn my_system(query: Query<Connection>) {
+/// fn my_system(query: Query<&Connection>) {
 ///     for connection in query.iter() {
 ///         println!("Connected to: {}", connection.remote_address());
 ///     }
