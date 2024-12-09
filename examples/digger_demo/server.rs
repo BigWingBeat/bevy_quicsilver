@@ -147,12 +147,12 @@ fn connection_error(error: Trigger<ConnectionError>) {
     error!("{}", error.event());
 }
 
-fn on_connected(trigger: Trigger<ConnectionEstablished>, connection: Query<Connection>) {
+fn on_connected(trigger: Trigger<ConnectionEstablished>, connection: Query<&Connection>) {
     // let connection = connection.get(trigger.entity()).unwrap();
     // info!("Client {} finished connecting", connection.remote_address());
 }
 
-fn poll_clients(mut query: Query<(Connection, &mut ClientState)>, password: Res<Password>) {
+fn poll_clients(mut query: Query<(&mut Connection, &mut ClientState)>, password: Res<Password>) {
     for (mut connection, mut state) in &mut query {
         match &mut *state {
             ClientState::WaitingForHello => {

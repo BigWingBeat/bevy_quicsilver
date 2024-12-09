@@ -1,9 +1,9 @@
 use bevy_ecs::{
-    bundle::Bundle,
     component::{Component, ComponentHooks, StorageType},
     entity::Entity,
-    query::{Has, QueryData, QueryEntityError},
+    query::{AnyOf, Has, QueryData, QueryEntityError},
     system::{Commands, Query, Res},
+    world::{DeferredWorld, EntityWorldMut},
 };
 use bevy_time::{Real, Time, Timer, TimerMode};
 use bytes::Bytes;
@@ -68,65 +68,52 @@ pub struct ConnectionDrained;
 #[derive(Debug, bevy_ecs::event::Event)]
 pub struct HandshakeDataReady;
 
-/// A bundle for adding a new connection to an entity.
+/// An in-progress connection attempt, that has not yet been fully established.
 ///
-/// Once this bundle is spawned or inserted onto an entity, that entity can be queried for with the [`Connecting`] query parameter,
-/// until a [`ConnectionEstablished`] trigger is fired for the entity, after which it can no longer be queried by [`Connecting`],
-/// and must instead be queried with [`Connection`].
-#[derive(Debug, Bundle)]
-#[must_use = "Connections are components and do nothing if not spawned or inserted onto an entity"]
-pub struct ConnectingBundle {
-    marker: StillConnecting,
-    connection: ConnectionImpl,
-}
-
-impl ConnectingBundle {
-    pub(crate) fn new(connection: ConnectionImpl) -> Self {
-        Self {
-            marker: StillConnecting,
-            connection,
-        }
-    }
-}
-
-/// Marker component type for connection entities that have not yet been fully established.
-/// (i.e. exposed to the user through [`Connecting`])
-#[derive(Debug)]
-struct StillConnecting;
-
-impl Component for StillConnecting {
-    const STORAGE_TYPE: StorageType = StorageType::Table;
-
-    fn register_component_hooks(hooks: &mut ComponentHooks) {
-        hooks.on_insert(|mut world, entity, _component_id| {
-            // In case an established connection is replaced with a new connection,
-            // to prevent the new connection from being queried as though it were fully established
-            world.commands().entity(entity).remove::<FullyConnected>();
-        });
-    }
-}
-
-/// A query parameter for an in-progress connection attempt, that has not yet been fully established.
-/// For available methods when querying entities with this type, see [`ConnectingItem`].
+/// When a [`ConnectionEstablished`] trigger is fired, this component is replaced with [`Connection`] on the target entity.
+///
+/// There can only ever be 1 connection on a given entity at a time. If this component is inserted onto an entity that already
+/// has a connection, that connection will be immediately destroyed, without being closed or drained, and replaced with this one.
 ///
 /// # Usage
 /// ```
 /// # use bevy_ecs::system::{Query, assert_is_system};
 /// # use bevy_quicsilver::Connecting;
 /// fn my_system(query: Query<Connecting>) {
-///     for connection in query.iter() {
-///         println!("{}", connection.remote_address());
+///     for connecting in query.iter() {
+///         println!("Connecting to: {}", connecting.remote_address());
 ///     }
 /// }
 /// # assert_is_system(my_system);
 /// ```
-#[derive(Debug, QueryData)]
-pub struct Connecting {
-    marker: &'static StillConnecting,
-    connection: &'static ConnectionImpl,
+// TODO: Use archetype invariants to specify that this and `Connection` are mutually exclusive
+// See https://github.com/bevyengine/bevy/issues/1481
+#[derive(Debug)]
+pub struct Connecting(ConnectionImpl);
+
+impl Component for Connecting {
+    const STORAGE_TYPE: StorageType = StorageType::Table;
+
+    fn register_component_hooks(hooks: &mut ComponentHooks) {
+        hooks.on_insert(|mut world, entity, _component_id| {
+            // To prevent there being more than 1 connection on this entity at a time
+            world.commands().entity(entity).remove::<Connection>();
+
+            // Bookkeeping
+            ConnectionImpl::on_insert(|world| &world.get::<Self>(entity).unwrap().0, world, entity);
+        });
+    }
 }
 
-impl ConnectingItem<'_> {
+impl Connecting {
+    pub(crate) fn new(
+        endpoint: Entity,
+        handle: ConnectionHandle,
+        connection: quinn_proto::Connection,
+    ) -> Self {
+        Self(ConnectionImpl::new(endpoint, handle, connection))
+    }
+
     /// Parameters negotiated during the handshake.
     ///
     /// Returns `None` until the [`HandshakeDataReady`] observer trigger is fired for this entity.
@@ -134,7 +121,7 @@ impl ConnectingItem<'_> {
     /// For the default `rustls` session, it can be [`downcast`](Box::downcast) to a
     /// [`crypto::rustls::HandshakeData`](quinn_proto::crypto::rustls::HandshakeData).
     pub fn handshake_data(&self) -> Option<Box<dyn Any>> {
-        self.connection.handshake_data()
+        self.0.handshake_data()
     }
 
     /// The peer's UDP address.
@@ -142,7 +129,7 @@ impl ConnectingItem<'_> {
     /// If [`ServerConfig::migration()`](crate::ServerConfig::migration) is `true`, clients may change addresses at will, e.g. when
     /// switching to a cellular internet connection.
     pub fn remote_address(&self) -> SocketAddr {
-        self.connection.remote_address()
+        self.0.remote_address()
     }
 
     /// The local IP address which was used when the peer established the connection.
@@ -153,32 +140,19 @@ impl ConnectingItem<'_> {
     /// This will return `None` for clients, or when the platform does not expose this
     /// information. See [`quinn_udp::RecvMeta::dst_ip`] for a list of supported platforms.
     pub fn local_ip(&self) -> Option<IpAddr> {
-        self.connection.local_ip()
+        self.0.local_ip()
     }
 
     /// Returns connection statistics.
     pub fn stats(&self) -> ConnectionStats {
-        self.connection.stats()
+        self.0.stats()
     }
 }
 
-/// Marker component type for connection entities that are fully established.
-/// (i.e. exposed to the user through [`Connection`])
-#[derive(Debug)]
-pub(crate) struct FullyConnected;
-
-impl Component for FullyConnected {
-    const STORAGE_TYPE: StorageType = StorageType::Table;
-
-    fn register_component_hooks(hooks: &mut ComponentHooks) {
-        hooks.on_insert(|mut world, entity, _component_id| {
-            world.trigger_targets(ConnectionEstablished, entity);
-        });
-    }
-}
-
-/// A query parameter for a fully established QUIC connection.
-/// For available methods when querying entities with this type, see [`ConnectionItem`] and [`ConnectionReadOnlyItem`].
+/// A fully established QUIC connection.
+///
+/// There can only ever be 1 connection on a given entity at a time. If this component is inserted onto an entity that already
+/// has a connection, that connection will be immediately destroyed, without being closed or drained, and replaced with this one.
 ///
 /// # Usage
 /// ```
@@ -186,20 +160,31 @@ impl Component for FullyConnected {
 /// # use bevy_quicsilver::Connection;
 /// fn my_system(query: Query<Connection>) {
 ///     for connection in query.iter() {
-///         println!("{}", connection.remote_address());
+///         println!("Connected to: {}", connection.remote_address());
 ///     }
 /// }
 /// # assert_is_system(my_system);
 /// ```
-#[derive(Debug, QueryData)]
-#[query_data(mutable)]
-pub struct Connection {
-    entity: Entity,
-    marker: &'static FullyConnected,
-    connection: &'static mut ConnectionImpl,
+#[derive(Debug)]
+// TODO: Use archetype invariants to specify that this and `Connecting` are mutually exclusive
+// See https://github.com/bevyengine/bevy/issues/1481
+pub struct Connection(ConnectionImpl);
+
+impl Component for Connection {
+    const STORAGE_TYPE: StorageType = StorageType::Table;
+
+    fn register_component_hooks(hooks: &mut ComponentHooks) {
+        hooks.on_insert(|mut world, entity, _component_id| {
+            // To prevent there being more than 1 connection on this entity at a time
+            world.commands().entity(entity).remove::<Connecting>();
+
+            // Bookkeeping
+            ConnectionImpl::on_insert(|world| &world.get::<Self>(entity).unwrap().0, world, entity);
+        });
+    }
 }
 
-impl ConnectionItem<'_> {
+impl Connection {
     /// Whether the connection is closed.
     ///
     /// Closed connections cannot transport any further data. A connection becomes closed when
@@ -210,7 +195,7 @@ impl ConnectionItem<'_> {
     /// the connection becomes drained, and the entity is despawned.
     /// If the entity has a [`KeepAlive`] component, only the connection component is removed instead.
     pub fn is_closed(&self) -> bool {
-        self.connection.is_closed()
+        self.0.is_closed()
     }
 
     /// Close the connection immediately.
@@ -229,7 +214,7 @@ impl ConnectionItem<'_> {
     /// [`finish`]: crate::SendStream::finish
     /// [`SendStream`]: crate::SendStream
     pub fn close(&mut self, error_code: VarInt, reason: Bytes) {
-        self.connection.close(Instant::now(), error_code, reason);
+        self.0.close(Instant::now(), error_code, reason);
     }
 
     /// Initiate a new outgoing unidirectional stream.
@@ -242,7 +227,7 @@ impl ConnectionItem<'_> {
     /// Returns `None` if outgoing unidirectional streams are currently exhausted.
     #[must_use = "The stream must be used for the peer to be notified that it has been opened"]
     pub fn open_uni(&mut self) -> Option<SendStream<'_>> {
-        self.connection.open_uni()
+        self.0.open_uni()
     }
 
     /// Initiate a new outgoing bidirectional stream.
@@ -260,7 +245,7 @@ impl ConnectionItem<'_> {
     /// [`RecvStream`]: crate::RecvStream
     #[must_use = "The stream must be used for the peer to be notified that it has been opened"]
     pub fn open_bi(&mut self) -> Option<StreamId> {
-        self.connection.open_bi()
+        self.0.open_bi()
     }
 
     /// Accept the next incoming unidirectional stream.
@@ -269,7 +254,7 @@ impl ConnectionItem<'_> {
     /// Returns `None` if there are no new incoming unidirectional streams for this connection.
     /// Has no impact on the data flow-control or stream concurrency limits.
     pub fn accept_uni(&mut self) -> Option<RecvStream<'_>> {
-        self.connection.accept_uni()
+        self.0.accept_uni()
     }
 
     /// Accept the next incoming bidirectional stream.
@@ -287,19 +272,19 @@ impl ConnectionItem<'_> {
     /// [`SendStream`]: crate::SendStream
     /// [`RecvStream`]: crate::RecvStream
     pub fn accept_bi(&mut self) -> Option<StreamId> {
-        self.connection.accept_bi()
+        self.0.accept_bi()
     }
 
     /// Get the send stream associated with the given stream ID.
     /// Returns an error if the stream does not exist, or has already been stopped, finished or reset.
     pub fn send_stream(&mut self, id: StreamId) -> Result<SendStream<'_>, ClosedStream> {
-        self.connection.send_stream(id)
+        self.0.send_stream(id)
     }
 
     /// Get the receive stream associated with the given stream ID.
     /// Returns an error if the stream does not exist, or has already been stopped, finished or reset.
     pub fn recv_stream(&mut self, id: StreamId) -> Result<RecvStream<'_>, ClosedStream> {
-        self.connection.recv_stream(id)
+        self.0.recv_stream(id)
     }
 
     /// Transmit `data` as an unreliable, unordered application datagram.
@@ -311,7 +296,7 @@ impl ConnectionItem<'_> {
     /// Previously queued datagrams which are still unsent may be discarded to make space for this datagram,
     /// in order of oldest to newest.
     pub fn send_datagram(&mut self, data: Bytes) -> Result<(), SendDatagramError> {
-        self.connection.send_datagram(data)
+        self.0.send_datagram(data)
     }
 
     /// Transmit `data` as an unreliable, unordered application datagram.
@@ -323,13 +308,13 @@ impl ConnectionItem<'_> {
     ///
     /// [`send_datagram()`]: Self::send_datagram
     pub fn send_datagram_wait(&mut self, data: Bytes) -> Result<(), SendDatagramError> {
-        self.connection.send_datagram_wait(data)
+        self.0.send_datagram_wait(data)
     }
 
     /// Receive an unreliable, unordered application datagram.
     /// Returns `None` if there are no received datagrams waiting to be read.
     pub fn read_datagram(&mut self) -> Option<Bytes> {
-        self.connection.read_datagram()
+        self.0.read_datagram()
     }
 
     /// Compute the maximum size of datagrams that can be sent.
@@ -342,14 +327,14 @@ impl ConnectionItem<'_> {
     ///
     /// Not necessarily the maximum size of received datagrams.
     pub fn max_datagram_size(&mut self) -> Option<usize> {
-        self.connection.max_datagram_size()
+        self.0.max_datagram_size()
     }
 
     /// Bytes available in the outgoing datagram buffer.
     ///
     /// When greater than zero, sending a datagram of at most this size is guaranteed not to cause older datagrams to be dropped.
     pub fn datagram_send_buffer_space(&mut self) -> usize {
-        self.connection.datagram_send_buffer_space()
+        self.0.datagram_send_buffer_space()
     }
 
     /// The peer's UDP address.
@@ -357,7 +342,7 @@ impl ConnectionItem<'_> {
     /// If [`ServerConfig::migration()`](crate::ServerConfig::migration) is `true`, clients may change addresses at will, e.g. when
     /// switching to a cellular internet connection.
     pub fn remote_address(&self) -> SocketAddr {
-        self.connection.remote_address()
+        self.0.remote_address()
     }
 
     /// The local IP address which was used when the peer established the connection.
@@ -368,22 +353,22 @@ impl ConnectionItem<'_> {
     /// This will return `None` for clients, or when the platform does not expose this
     /// information. See [`quinn_udp::RecvMeta::dst_ip`] for a list of supported platforms.
     pub fn local_ip(&self) -> Option<IpAddr> {
-        self.connection.local_ip()
+        self.0.local_ip()
     }
 
     /// Current best estimate of this connection's latency (round-trip time).
     pub fn rtt(&self) -> Duration {
-        self.connection.rtt()
+        self.0.rtt()
     }
 
     /// Returns connection statistics.
     pub fn stats(&self) -> ConnectionStats {
-        self.connection.stats()
+        self.0.stats()
     }
 
     /// Current state of this connection's congestion control algorithm, for debugging purposes.
     pub fn congestion_state(&self) -> &dyn Controller {
-        self.connection.congestion_state()
+        self.0.congestion_state()
     }
 
     /// Parameters negotiated during the handshake.
@@ -393,7 +378,7 @@ impl ConnectionItem<'_> {
     /// For the default `rustls` session, it can be [`downcast`](Box::downcast) to a
     /// [`crypto::rustls::HandshakeData`](crate::crypto::rustls::HandshakeData).
     pub fn handshake_data(&self) -> Option<Box<dyn Any>> {
-        self.connection.handshake_data()
+        self.0.handshake_data()
     }
 
     /// Cryptographic identity of the peer.
@@ -402,7 +387,7 @@ impl ConnectionItem<'_> {
     /// For the default `rustls` session, it can be [`downcast`](Box::downcast) to a
     /// <code>Vec<[rustls::pki_types::CertificateDer]></code>.
     pub fn peer_identity(&self) -> Option<Box<dyn Any>> {
-        self.connection.peer_identity()
+        self.0.peer_identity()
     }
 
     /// Derive keying material from this connection's TLS session secrets.
@@ -419,8 +404,7 @@ impl ConnectionItem<'_> {
         label: &[u8],
         context: &[u8],
     ) -> Result<(), ExportKeyingMaterialError> {
-        self.connection
-            .export_keying_material(output, label, context)
+        self.0.export_keying_material(output, label, context)
     }
 
     /// Modify the number of remotely initiated unidirectional streams that may be concurrently open.
@@ -428,7 +412,7 @@ impl ConnectionItem<'_> {
     /// No streams may be opened by the peer unless fewer than `count` are already open.
     /// Large `count`s increase both minimum and worst-case memory consumption.
     pub fn set_max_concurrent_uni_streams(&mut self, count: VarInt) {
-        self.connection.set_max_concurrent_uni_streams(count);
+        self.0.set_max_concurrent_uni_streams(count);
     }
 
     /// Modify the number of remotely initiated bidirectional streams that may be concurrently open.
@@ -436,104 +420,48 @@ impl ConnectionItem<'_> {
     /// No streams may be opened by the peer unless fewer than `count` are already open.
     /// Large `count`s increase both minimum and worst-case memory consumption.
     pub fn set_max_concurrent_bi_streams(&mut self, count: VarInt) {
-        self.connection.set_max_concurrent_bi_streams(count);
+        self.0.set_max_concurrent_bi_streams(count);
     }
 }
 
-impl ConnectionReadOnlyItem<'_> {
-    /// Whether the connection is closed.
-    ///
-    /// Closed connections cannot transport any further data. A connection becomes closed when
-    /// either peer application intentionally closes it, or when either transport layer detects an
-    /// error such as a time-out or certificate validation failure.
-    ///
-    /// When the connection becomes closed, a [`ConnectionError`] event is fired, and after a brief timeout,
-    /// the connection becomes drained, and the entity is despawned.
-    /// If the entity has a [`KeepAlive`] component, only the connection component is removed instead.
-    pub fn is_closed(&self) -> bool {
-        self.connection.is_closed()
-    }
+/// Internal helper `QueryData` to handle `Connecting` & `Connection` being distinct component types
+#[derive(QueryData)]
+#[query_data(mutable)]
+pub(crate) struct ConnectionQuery {
+    query: AnyOf<(&'static mut Connecting, &'static mut Connection)>,
+}
 
-    /// The peer's UDP address.
-    ///
-    /// If [`ServerConfig::migration()`](crate::ServerConfig::migration) is `true`, clients may change addresses at will, e.g. when
-    /// switching to a cellular internet connection.
-    pub fn remote_address(&self) -> SocketAddr {
-        self.connection.remote_address()
-    }
-
-    /// The local IP address which was used when the peer established the connection.
-    ///
-    /// This can be different from the address the endpoint is bound to, in case
-    /// the endpoint is bound to a wildcard address like `0.0.0.0` or `::`.
-    ///
-    /// This will return `None` for clients, or when the platform does not expose this
-    /// information. See [`quinn_udp::RecvMeta::dst_ip`] for a list of supported platforms.
-    pub fn local_ip(&self) -> Option<IpAddr> {
-        self.connection.local_ip()
-    }
-
-    /// Current best estimate of this connection's latency (round-trip time).
-    pub fn rtt(&self) -> Duration {
-        self.connection.rtt()
-    }
-
-    /// Returns connection statistics.
-    pub fn stats(&self) -> ConnectionStats {
-        self.connection.stats()
-    }
-
-    /// Current state of this connection's congestion control algorithm, for debugging purposes.
-    pub fn congestion_state(&self) -> &dyn Controller {
-        self.connection.congestion_state()
-    }
-
-    /// Parameters negotiated during the handshake.
-    ///
-    /// Guranteed to return `Some` on fully established connections.
-    /// The dynamic type returned is determined by the configured [`Session`](crate::crypto::Session).
-    /// For the default `rustls` session, it can be [`downcast`](Box::downcast) to a
-    /// [`crypto::rustls::HandshakeData`](crate::crypto::rustls::HandshakeData).
-    pub fn handshake_data(&self) -> Option<Box<dyn Any>> {
-        self.connection.handshake_data()
-    }
-
-    /// Cryptographic identity of the peer.
-    ///
-    /// The dynamic type returned is determined by the configured [`Session`](crate::crypto::Session).
-    /// For the default `rustls` session, it can be [`downcast`](Box::downcast) to a
-    /// <code>Vec<[rustls::pki_types::CertificateDer]></code>.
-    pub fn peer_identity(&self) -> Option<Box<dyn Any>> {
-        self.connection.peer_identity()
-    }
-
-    /// Derive keying material from this connection's TLS session secrets.
-    ///
-    /// When both peers call this method with the same `label` and `context`
-    /// arguments and `output` buffers of equal length, they will get the
-    /// same sequence of bytes in `output`. These bytes are cryptographically
-    /// strong and pseudorandom, and are suitable for use as keying material.
-    ///
-    /// See [RFC5705](https://tools.ietf.org/html/rfc5705) for more information.
-    pub fn export_keying_material(
-        &self,
-        output: &mut [u8],
-        label: &[u8],
-        context: &[u8],
-    ) -> Result<(), ExportKeyingMaterialError> {
-        self.connection
-            .export_keying_material(output, label, context)
+impl<'w> ConnectionQueryItem<'w> {
+    /// Get the connection and whether or not it is fully established
+    pub(crate) fn get(self) -> (bool, &'w mut ConnectionImpl) {
+        match self.query {
+            (None, Some(c)) => (true, &mut c.into_inner().0),
+            (Some(c), None) => (false, &mut c.into_inner().0),
+            _ => unreachable!("Connecting and Connection are mutually exclusive"),
+        }
     }
 }
 
-/// Underlying component type behind the [`Connecting`] and [`Connection`] querydata types.
+impl<'w> ConnectionQueryReadOnlyItem<'w> {
+    /// Get the connection and whether or not it is fully established
+    #[expect(dead_code)]
+    pub(crate) fn get(self) -> (bool, &'w ConnectionImpl) {
+        match self.query {
+            (None, Some(c)) => (true, &c.0),
+            (Some(c), None) => (false, &c.0),
+            _ => unreachable!("Connecting and Connection are mutually exclusive"),
+        }
+    }
+}
+
+/// Underlying impl type behind the [`Connecting`] and [`Connection`] component types.
 #[derive(Debug)]
 pub(crate) struct ConnectionImpl {
     pub(crate) endpoint: Entity,
     pub(crate) handle: ConnectionHandle,
     connection: quinn_proto::Connection,
     timeout_timer: Option<(Timer, Instant)>,
-    pub(crate) should_poll: bool,
+    should_poll: bool,
     io_error: bool,
     blocked_transmit: Option<Transmit>,
     transmit_buf: Vec<u8>,
@@ -541,24 +469,8 @@ pub(crate) struct ConnectionImpl {
     pending_streams: HashMap<StreamId, Vec<Bytes>>,
 }
 
-impl Component for ConnectionImpl {
-    const STORAGE_TYPE: StorageType = StorageType::Table;
-
-    fn register_component_hooks(hooks: &mut ComponentHooks) {
-        hooks.on_insert(|mut world, entity, _component_id| {
-            // Bookkeeping so the endpoint knows the entity we're on
-            let connection = world.get::<Self>(entity).unwrap();
-            let handle = connection.handle;
-            let Some(mut endpoint) = world.get_mut::<EndpointImpl>(connection.endpoint) else {
-                return;
-            };
-            endpoint.connections.insert(handle, entity);
-        });
-    }
-}
-
 impl ConnectionImpl {
-    pub(crate) fn new(
+    fn new(
         endpoint: Entity,
         handle: ConnectionHandle,
         connection: quinn_proto::Connection,
@@ -627,7 +539,7 @@ impl ConnectionImpl {
         })
     }
 
-    pub(crate) fn send_stream(&mut self, id: StreamId) -> Result<SendStream<'_>, ClosedStream> {
+    fn send_stream(&mut self, id: StreamId) -> Result<SendStream<'_>, ClosedStream> {
         self.should_poll = true;
         self.pending_streams
             .get_mut(&id)
@@ -640,7 +552,7 @@ impl ConnectionImpl {
             .ok_or_else(ClosedStream::new)
     }
 
-    pub(crate) fn recv_stream(&mut self, id: StreamId) -> Result<RecvStream<'_>, ClosedStream> {
+    fn recv_stream(&mut self, id: StreamId) -> Result<RecvStream<'_>, ClosedStream> {
         self.should_poll = true;
         (id.dir() == Dir::Bi || id.initiator() != self.connection.side())
             .then(|| RecvStream {
@@ -806,22 +718,33 @@ impl ConnectionImpl {
     fn poll(&mut self) -> Option<Event> {
         self.connection.poll()
     }
+
+    fn on_insert(
+        this: impl for<'a> FnOnce(&'a DeferredWorld<'a>) -> &'a Self,
+        mut world: DeferredWorld,
+        entity: Entity,
+    ) {
+        // Bookkeeping so the endpoint knows the entity we're on
+        let this = this(&world);
+        let handle = this.handle;
+        let Some(mut endpoint) = world.get_mut::<EndpointImpl>(this.endpoint) else {
+            return;
+        };
+        endpoint.connection_inserted(handle, entity);
+    }
 }
 
 /// Based on <https://github.com/quinn-rs/quinn/blob/0.11.1/quinn/src/connection.rs#L231>
 pub(crate) fn poll_connections(
     mut commands: Commands,
-    mut query: Query<(
-        Entity,
-        &mut ConnectionImpl,
-        Has<FullyConnected>,
-        Has<KeepAlive>,
-    )>,
+    mut query: Query<(Entity, ConnectionQuery, Has<KeepAlive>)>,
     mut endpoint: Query<Endpoint>,
     time: Res<Time<Real>>,
 ) {
     let now = Instant::now();
-    for (entity, mut connection, established, keepalive) in &mut query {
+    for (entity, connection, keepalive) in &mut query {
+        let (established, connection) = connection.get();
+
         let Some(mut endpoint) = ({
             if connection.is_drained() {
                 commands.trigger_targets(ConnectionDrained, entity);
@@ -832,8 +755,7 @@ pub(crate) fn poll_connections(
                         // Return None if the endpoint was replaced with a new one
                         endpoint
                             .endpoint
-                            .connections
-                            .contains_key(&connection.handle)
+                            .knows_connection(connection.handle)
                             .then_some(endpoint)
                     }
                     Err(
@@ -848,7 +770,7 @@ pub(crate) fn poll_connections(
         }) else {
             commands
                 .entity(entity)
-                .remove_or_despawn::<(ConnectionImpl, StillConnecting, FullyConnected)>(keepalive);
+                .remove_or_despawn::<(Connecting, Connection)>(keepalive);
             continue;
         };
 
@@ -861,6 +783,11 @@ pub(crate) fn poll_connections(
 
         // Poll in a loop to eagerly do as much work as we can,
         // instead of polling once per system run, which would mean polling only once per app update
+
+        // TODO: Always poll each update to avoid having to remember to set should_poll in every method
+        // let mut should_poll = true;
+        // while should_poll {
+        // should_poll = false;
         while connection.should_poll {
             connection.should_poll = false;
 
@@ -914,10 +841,11 @@ pub(crate) fn poll_connections(
                         commands.trigger_targets(HandshakeDataReady, entity);
                     }
                     Event::Connected => {
-                        commands
-                            .entity(entity)
-                            .remove::<StillConnecting>()
-                            .insert(FullyConnected);
+                        commands.entity(entity).queue(|mut entity: EntityWorldMut| {
+                            if let Some(Connecting(connection)) = entity.take() {
+                                entity.insert(Connection(connection));
+                            }
+                        });
                     }
                     Event::ConnectionLost { reason } => {
                         if established {
@@ -938,18 +866,11 @@ pub(crate) fn poll_connections(
             }
 
             for id in streams_to_flush {
-                let ConnectionImpl {
-                    connection,
-                    should_poll,
-                    pending_streams,
-                    ..
-                } = &mut *connection;
-
-                if let Some(pending_writes) = pending_streams.get_mut(&id) {
-                    let mut proto_stream = connection.send_stream(id);
+                if let Some(pending_writes) = connection.pending_streams.get_mut(&id) {
+                    let mut proto_stream = connection.connection.send_stream(id);
                     let _ = proto_stream.write_chunks(pending_writes);
                     pending_writes.retain(|bytes| !bytes.is_empty());
-                    *should_poll = true;
+                    connection.should_poll = true;
                 }
             }
         }
@@ -975,7 +896,7 @@ mod tests {
 
     use super::{
         Connecting, ConnectingError, Connection, ConnectionAccepted, ConnectionDrained,
-        ConnectionError, ConnectionEstablished, ConnectionImpl, HandshakeDataReady,
+        ConnectionError, ConnectionEstablished, HandshakeDataReady,
     };
 
     #[test]
@@ -997,7 +918,7 @@ mod tests {
         assert!(!app
             .world()
             .entity(connections.server)
-            .contains::<ConnectionImpl>());
+            .contains::<Connection>());
 
         // Client without keepalive should be despawned
         assert!(app
@@ -1015,7 +936,7 @@ mod tests {
 
         let mut server = app
             .world_mut()
-            .query::<Connection>()
+            .query::<&mut Connection>()
             .get_mut(app.world_mut(), connections.server)
             .unwrap();
 
@@ -1023,7 +944,7 @@ mod tests {
 
         app.world_mut()
             .entity_mut(connections.client)
-            .observe(test_observer::<ConnectionError, Connection>());
+            .observe(test_observer::<ConnectionError, &Connection>);
 
         app.update();
         app.update();
@@ -1041,7 +962,7 @@ mod tests {
 
         app.world_mut()
             .entity_mut(connections.client)
-            .observe(test_observer::<ConnectingError, Connecting>());
+            .observe(test_observer::<ConnectingError, &Connecting>);
 
         app.update();
         app.update();
@@ -1058,7 +979,7 @@ mod tests {
 
         app.world_mut()
             .entity_mut(server)
-            .observe(test_observer::<ConnectionAccepted, Connecting>());
+            .observe(test_observer::<ConnectionAccepted, &Connecting>);
 
         app.update();
     }
@@ -1077,7 +998,7 @@ mod tests {
 
         app.world_mut()
             .entity_mut(server)
-            .observe(test_observer::<ConnectionEstablished, Connection>());
+            .observe(test_observer::<ConnectionEstablished, &Connection>);
 
         app.update();
     }
@@ -1092,7 +1013,7 @@ mod tests {
 
         let mut connection = app
             .world_mut()
-            .query::<Connection>()
+            .query::<&mut Connection>()
             .get_mut(app.world_mut(), server)
             .unwrap();
 
@@ -1100,7 +1021,7 @@ mod tests {
 
         app.world_mut()
             .entity_mut(server)
-            .observe(test_observer::<ConnectionDrained, Connection>());
+            .observe(test_observer::<ConnectionDrained, &Connection>);
 
         // Wait for the drain timeout to elapse
         while !app.world().resource::<HasObserverTriggered>().0 {
@@ -1125,9 +1046,9 @@ mod tests {
 
         app.world_mut().entity_mut(server).observe(
             |trigger: Trigger<HandshakeDataReady>,
-             mut connecting: Query<Connecting>,
+             connecting: Query<&Connecting>,
              mut res: ResMut<HasObserverTriggered>| {
-                let connecting = connecting.get_mut(trigger.entity()).unwrap();
+                let connecting = connecting.get(trigger.entity()).unwrap();
                 let data = connecting.handshake_data().unwrap();
                 let data = data.downcast::<HandshakeData>().unwrap();
                 assert_eq!(data.server_name, Some("localhost".into()));

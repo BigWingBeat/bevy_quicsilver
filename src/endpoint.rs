@@ -21,10 +21,10 @@ use quinn_proto::{
 use thiserror::Error;
 
 use crate::{
-    connection::{ConnectingBundle, ConnectionImpl},
+    connection::ConnectionQuery,
     incoming::Incoming,
     socket::{UdpSocket, UdpSocketRecvDriver},
-    KeepAlive, KeepAliveEntityCommandsExt,
+    Connecting, KeepAlive, KeepAliveEntityCommandsExt,
 };
 
 /// An observer trigger that is fired when an [`Endpoint`] encounters an error.
@@ -172,11 +172,12 @@ impl EndpointItem<'_> {
     ///
     /// The exact value of the `server_name` parameter must be included in the `subject_alt_names` field of the server's certificate,
     /// as described by [`rcgen::generate_simple_self_signed`].
+    #[must_use = "Connections are components and do nothing if not spawned or inserted onto an entity"]
     pub fn connect(
         &mut self,
         server_address: SocketAddr,
         server_name: &str,
-    ) -> Result<ConnectingBundle, ConnectError> {
+    ) -> Result<Connecting, ConnectError> {
         self.endpoint
             .connect(self.entity, server_address, server_name)
     }
@@ -186,12 +187,13 @@ impl EndpointItem<'_> {
     ///
     /// The exact value of the `server_name` parameter must be included in the `subject_alt_names` field of the server's certificate,
     /// as described by [`rcgen::generate_simple_self_signed`].
+    #[must_use = "Connections are components and do nothing if not spawned or inserted onto an entity"]
     pub fn connect_with(
         &mut self,
         server_address: SocketAddr,
         server_name: &str,
         client_config: ClientConfig,
-    ) -> Result<ConnectingBundle, ConnectError> {
+    ) -> Result<Connecting, ConnectError> {
         self.endpoint
             .connect_with(self.entity, server_address, server_name, client_config)
     }
@@ -283,7 +285,7 @@ impl EndpointReadOnlyItem<'_> {
 pub(crate) struct EndpointImpl {
     endpoint: Arc<Mutex<quinn_proto::Endpoint>>,
     default_client_config: Option<ClientConfig>,
-    pub(crate) connections: HashMap<ConnectionHandle, Entity>,
+    connections: HashMap<ConnectionHandle, Entity>,
     socket: Arc<UdpSocket>,
     receiver: Receiver<Result<crate::socket::DatagramEvent, std::io::Error>>,
     ipv6: bool,
@@ -376,6 +378,7 @@ impl EndpointImpl {
         })
     }
 
+    // TODO: privacy
     pub(crate) fn handle_event(
         &mut self,
         connection: ConnectionHandle,
@@ -387,12 +390,20 @@ impl EndpointImpl {
             .handle_event(connection, event)
     }
 
+    pub(crate) fn knows_connection(&self, connection: ConnectionHandle) -> bool {
+        self.connections.contains_key(&connection)
+    }
+
+    pub(crate) fn connection_inserted(&mut self, connection: ConnectionHandle, entity: Entity) {
+        self.connections.insert(connection, entity);
+    }
+
     fn connect(
         &mut self,
         self_entity: Entity,
         server_address: SocketAddr,
         server_name: &str,
-    ) -> Result<ConnectingBundle, ConnectError> {
+    ) -> Result<Connecting, ConnectError> {
         self.default_client_config
             .clone()
             .ok_or(ConnectError::NoDefaultClientConfig)
@@ -407,7 +418,7 @@ impl EndpointImpl {
         mut server_address: SocketAddr,
         server_name: &str,
         client_config: ClientConfig,
-    ) -> Result<ConnectingBundle, ConnectError> {
+    ) -> Result<Connecting, ConnectError> {
         let now = Instant::now();
 
         // Handle mismatched address families, not handling this can cause the connection to silently fail
@@ -433,9 +444,7 @@ impl EndpointImpl {
             .lock()
             .unwrap()
             .connect(now, client_config, server_address, server_name)
-            .map(|(handle, connection)| {
-                ConnectingBundle::new(ConnectionImpl::new(self_entity, handle, connection))
-            })
+            .map(|(handle, connection)| Connecting::new(self_entity, handle, connection))
     }
 
     fn accept(
@@ -529,7 +538,7 @@ impl EndpointImpl {
 pub(crate) fn poll_endpoints(
     mut commands: Commands,
     mut endpoint_query: Query<(Endpoint, Has<KeepAlive>)>,
-    mut connection_query: Query<(Entity, &mut ConnectionImpl)>,
+    mut connection_query: Query<(Entity, ConnectionQuery)>,
 ) {
     for (
         EndpointItem {
@@ -560,7 +569,8 @@ pub(crate) fn poll_endpoints(
                             .expect("ConnectionHandle {handle:?} is missing Entity mapping");
 
                         match connection_query.get_mut(connection_entity) {
-                            Ok((_, mut connection)) => {
+                            Ok((_, connection)) => {
+                                let (_, connection) = connection.get();
                                 if connection.handle == handle
                                     && connection.endpoint == endpoint_entity
                                 {
@@ -650,7 +660,7 @@ mod tests {
     use bytes::Bytes;
 
     use crate::{
-        connection::{Connecting, Connection, ConnectionEstablished, ConnectionImpl},
+        connection::{Connecting, Connection, ConnectionEstablished},
         incoming::NewIncoming,
         tests::*,
         Incoming, IncomingResponse,
@@ -673,10 +683,10 @@ mod tests {
 
         app.world_mut()
             .entity_mut(connections.server)
-            .remove::<ConnectionImpl>();
+            .remove::<Connection>();
 
         app.world_mut()
-            .query::<Connection>()
+            .query::<&mut Connection>()
             .get_mut(app.world_mut(), connections.client)
             .unwrap()
             .send_datagram(Bytes::new())
@@ -709,7 +719,7 @@ mod tests {
         app.world_mut().entity_mut(connections.server).despawn();
 
         app.world_mut()
-            .query::<Connection>()
+            .query::<&mut Connection>()
             .get_mut(app.world_mut(), connections.client)
             .unwrap()
             .send_datagram(Bytes::new())
@@ -778,7 +788,7 @@ mod tests {
 
             let stats = $client_app
                 .world_mut()
-                .query::<Connecting>()
+                .query::<&Connecting>()
                 .get($client_app.world(), client_connection)
                 .unwrap()
                 .stats();
@@ -813,7 +823,7 @@ mod tests {
 
             let stats = $server_app
                 .world_mut()
-                .query_filtered::<Connecting, Without<Incoming>>()
+                .query_filtered::<&Connecting, Without<Incoming>>()
                 .get($server_app.world(), server_connection)
                 .unwrap()
                 .stats();
@@ -838,7 +848,7 @@ mod tests {
             // Confirm that the connections can send data to each other
             let mut client_connection = $client_app
                 .world_mut()
-                .query::<Connection>()
+                .query::<&mut Connection>()
                 .get_mut($client_app.world_mut(), $client_connection_entity)
                 .expect("0");
 
@@ -848,7 +858,7 @@ mod tests {
 
             let mut server_connection = $server_app
                 .world_mut()
-                .query::<Connection>()
+                .query::<&mut Connection>()
                 .get_mut($server_app.world_mut(), $server_connection_entity)
                 .expect("2");
 
@@ -863,7 +873,7 @@ mod tests {
 
             let mut client_connection = $client_app
                 .world_mut()
-                .query::<Connection>()
+                .query::<&mut Connection>()
                 .get_mut($client_app.world_mut(), $client_connection_entity)
                 .expect("4");
 
@@ -874,7 +884,7 @@ mod tests {
 
             let mut server_connection = $server_app
                 .world_mut()
-                .query::<Connection>()
+                .query::<&mut Connection>()
                 .get_mut($server_app.world_mut(), $server_connection_entity)
                 .expect("7");
 

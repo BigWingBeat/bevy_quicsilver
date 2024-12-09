@@ -131,7 +131,7 @@ fn connection_error(trigger: Trigger<ConnectionError>) {
     }
 }
 
-fn send_datagrams(mut connection: Query<Connection>, mut state: ResMut<NextState<State>>) {
+fn send_datagrams(mut connection: Query<&mut Connection>, mut state: ResMut<NextState<State>>) {
     // Datagrams are message-based, unreliable and unordered packets of data, comparable to UDP.
     // They may be lost or delivered out of order, but are still a useful tool for information that is quickly outdated
     let mut connection = connection.get_single_mut().unwrap();
@@ -144,7 +144,7 @@ fn send_datagrams(mut connection: Query<Connection>, mut state: ResMut<NextState
 
 fn spawn_streams(
     mut commands: Commands,
-    mut connection: Query<Connection>,
+    mut connection: Query<&mut Connection>,
     mut state: ResMut<NextState<State>>,
 ) {
     // Streams are reliable and ordered data streams, comparable to TCP.
@@ -161,7 +161,7 @@ fn spawn_streams(
 }
 
 fn recv_stream(
-    mut connection: Query<Connection>,
+    mut connection: Query<&mut Connection>,
     id: Res<Stream>,
     mut state: ResMut<NextState<State>>,
 ) {
@@ -194,7 +194,7 @@ fn recv_stream(
     }
 }
 
-fn close_connection(mut connection: Query<Connection>) {
+fn close_connection(mut connection: Query<&mut Connection>) {
     // When closing a connection, you must wait a bit for pending data to be flushed,
     // and for the peer to be informed that the connection is closing
     println!("Closing");

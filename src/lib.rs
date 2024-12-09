@@ -15,8 +15,8 @@ pub use quinn_proto::{
 
 mod connection;
 pub use connection::{
-    Connecting, ConnectingBundle, ConnectingError, Connection, ConnectionAccepted,
-    ConnectionDrained, ConnectionError, ConnectionEstablished, HandshakeDataReady,
+    Connecting, ConnectingError, Connection, ConnectionAccepted, ConnectionDrained,
+    ConnectionError, ConnectionEstablished, HandshakeDataReady,
 };
 
 pub mod crypto;
@@ -37,9 +37,6 @@ pub use streams::{RecvError, RecvStream, SendStream};
 
 /// Automatically generated types for ECS queries.
 pub mod query {
-    pub use crate::connection::{
-        ConnectingItem, ConnectionItem, ConnectionReadOnly, ConnectionReadOnlyItem,
-    };
     pub use crate::endpoint::{EndpointItem, EndpointReadOnly, EndpointReadOnlyItem};
 }
 
@@ -112,11 +109,12 @@ mod tests {
     }
 
     pub(crate) fn test_observer<T, C: QueryData>(
-    ) -> impl Fn(Trigger<T>, Query<C>, ResMut<HasObserverTriggered>) {
-        |trigger: Trigger<T>, query: Query<C>, mut res: ResMut<HasObserverTriggered>| {
-            let _ = query.get(trigger.entity()).unwrap();
-            res.0 = true;
-        }
+        trigger: Trigger<T>,
+        query: Query<C>,
+        mut res: ResMut<HasObserverTriggered>,
+    ) {
+        let _ = query.get(trigger.entity()).unwrap();
+        res.0 = true;
     }
 
     pub(crate) fn app() -> App {

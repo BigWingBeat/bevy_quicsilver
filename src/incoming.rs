@@ -14,11 +14,7 @@ use bevy_ecs::{
 use quinn_proto::{ConnectionError, ServerConfig};
 use thiserror::Error;
 
-use crate::{
-    connection::{ConnectingBundle, ConnectionAccepted, ConnectionImpl},
-    endpoint::Endpoint,
-    KeepAlive,
-};
+use crate::{connection::ConnectionAccepted, endpoint::Endpoint, Connecting, KeepAlive};
 
 /// An observer trigger that is fired whenever an [`Incoming`] entity encounters an error.
 #[derive(Debug, Error, Event)]
@@ -248,11 +244,7 @@ pub(crate) fn handle_incoming_responses(
         match result {
             // Connection successfully accepted
             Ok(Some((handle, connection))) => {
-                incoming_entity.insert(ConnectingBundle::new(ConnectionImpl::new(
-                    endpoint_entity,
-                    handle,
-                    connection,
-                )));
+                incoming_entity.insert(Connecting::new(endpoint_entity, handle, connection));
                 incoming_entity.world_scope(|world| {
                     world.trigger_targets(ConnectionAccepted, incoming_entity_id);
                 });
@@ -370,7 +362,7 @@ mod tests {
 
         app.update();
 
-        app.add_observer(test_observer::<NewIncoming, &Incoming>());
+        app.add_observer(test_observer::<NewIncoming, &Incoming>);
 
         app.update();
     }

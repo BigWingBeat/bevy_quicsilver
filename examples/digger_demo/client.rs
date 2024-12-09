@@ -94,7 +94,7 @@ fn connection_error(error: Trigger<ConnectionError>) {
 
 fn on_connected(
     _: Trigger<ConnectionEstablished>,
-    mut connection: Query<(Connection, &mut ConnectionState)>,
+    mut connection: Query<(&mut Connection, &mut ConnectionState)>,
     username: Res<Username>,
     password: Res<Password>,
 ) {

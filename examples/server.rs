@@ -114,7 +114,7 @@ fn accept_connections(
         .insert(ClientState::WaitingForStream);
 }
 
-fn connecting_error(trigger: Trigger<ConnectingError>, connecting: Query<Connecting>) {
+fn connecting_error(trigger: Trigger<ConnectingError>, connecting: Query<&Connecting>) {
     let connecting = connecting.get(trigger.entity()).unwrap();
     let address = connecting.remote_address();
     match trigger.event() {
@@ -123,13 +123,13 @@ fn connecting_error(trigger: Trigger<ConnectingError>, connecting: Query<Connect
     }
 }
 
-fn connection_established(trigger: Trigger<ConnectionEstablished>, connection: Query<Connection>) {
+fn connection_established(trigger: Trigger<ConnectionEstablished>, connection: Query<&Connection>) {
     let connection = connection.get(trigger.entity()).unwrap();
     let address = connection.remote_address();
     println!("Connection established with client {address}");
 }
 
-fn connection_error(trigger: Trigger<ConnectionError>, connection: Query<Connection>) {
+fn connection_error(trigger: Trigger<ConnectionError>, connection: Query<&Connection>) {
     let connection = connection.get(trigger.entity()).unwrap();
     let address = connection.remote_address();
     match trigger.event() {
@@ -138,7 +138,7 @@ fn connection_error(trigger: Trigger<ConnectionError>, connection: Query<Connect
     }
 }
 
-fn handle_clients(mut connection: Query<(Connection, &mut ClientState)>) {
+fn handle_clients(mut connection: Query<(&mut Connection, &mut ClientState)>) {
     for (mut connection, mut state) in connection.iter_mut() {
         let address = connection.remote_address();
 
