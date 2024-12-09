@@ -8,9 +8,9 @@ use bevy_ecs::{bundle::Bundle, component::Component, system::EntityCommands};
 
 pub use quinn_proto as proto;
 pub use quinn_proto::{
-    ApplicationClose, ClientConfig, ClosedStream, ConnectError,
-    ConnectionError as ConnectionLostError, EndpointConfig, FinishError, SendDatagramError,
-    ServerConfig, StreamId, VarInt, VarIntBoundsExceeded, WriteError, Written,
+    ApplicationClose, ClientConfig, ClosedStream, ConnectionError as ConnectionLostError,
+    EndpointConfig, FinishError, SendDatagramError, ServerConfig, StreamId, VarInt,
+    VarIntBoundsExceeded, WriteError, Written,
 };
 
 mod connection;
@@ -22,7 +22,7 @@ pub use connection::{
 pub mod crypto;
 
 mod endpoint;
-pub use endpoint::{Endpoint, EndpointBundle, EndpointError};
+pub use endpoint::{ConnectError, Endpoint, EndpointError};
 
 mod incoming;
 pub use incoming::{Incoming, IncomingError, IncomingResponse, NewIncoming};
@@ -34,11 +34,6 @@ mod socket;
 
 mod streams;
 pub use streams::{RecvError, RecvStream, SendStream};
-
-/// Automatically generated types for ECS queries.
-pub mod query {
-    pub use crate::endpoint::{EndpointItem, EndpointReadOnly, EndpointReadOnlyItem};
-}
 
 /// If this component is placed on an entity, it will never be automatically despawned by this library.
 /// For example, closing a connection normally results in the entity being despawned, but if this component
@@ -77,7 +72,7 @@ mod tests {
 
     use crate::{
         connection::{ConnectingError, ConnectionError},
-        endpoint::{EndpointBundle, EndpointError},
+        endpoint::EndpointError,
         incoming::IncomingError,
         Endpoint, Incoming, IncomingResponse, QuicPlugin,
     };
@@ -168,9 +163,9 @@ mod tests {
         )
     }
 
-    pub(crate) fn endpoint() -> EndpointBundle {
+    pub(crate) fn endpoint() -> Endpoint {
         let (client, server) = generate_crypto();
-        EndpointBundle::new_client_host((Ipv6Addr::LOCALHOST, 0).into(), client, server).unwrap()
+        Endpoint::new_client_host((Ipv6Addr::LOCALHOST, 0).into(), client, server).unwrap()
     }
 
     pub(crate) fn incoming(app: &mut App) -> ConnectionEntities {
@@ -179,7 +174,7 @@ mod tests {
 
         let mut endpoint = app
             .world_mut()
-            .query::<Endpoint>()
+            .query::<&mut Endpoint>()
             .single_mut(app.world_mut());
 
         let addr = endpoint.local_addr().unwrap();

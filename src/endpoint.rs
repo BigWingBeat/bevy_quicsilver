@@ -5,19 +5,18 @@ use std::{
 };
 
 use bevy_ecs::{
-    bundle::Bundle,
-    component::Component,
+    component::{Component, ComponentHooks, StorageType},
     entity::Entity,
     event::Event,
-    query::{Has, QueryData, QueryEntityError},
+    query::{Has, QueryEntityError},
     system::{Commands, Query},
 };
 use bevy_tasks::TaskPool;
 use crossbeam_channel::Receiver;
 use hashbrown::HashMap;
 use quinn_proto::{
-    AcceptError, ClientConfig, ConnectError, ConnectionError, ConnectionEvent, ConnectionHandle,
-    DatagramEvent, EndpointConfig, EndpointEvent, RetryError, ServerConfig,
+    AcceptError, ClientConfig, ConnectionError, ConnectionEvent, ConnectionHandle, DatagramEvent,
+    EndpointConfig, EndpointEvent, RetryError, ServerConfig,
 };
 use thiserror::Error;
 
@@ -42,12 +41,65 @@ pub enum EndpointError {
     IoError(std::io::Error),
 }
 
-/// A bundle for adding an [`Endpoint`] to an entity.
-#[derive(Debug, Bundle)]
-#[must_use = "Endpoints are components and do nothing if not spawned or inserted onto an entity"]
-pub struct EndpointBundle(EndpointImpl);
+/// Errors in the parameters being used to create a new connection
+///
+/// These arise before any I/O has been performed.
+#[derive(Debug, Error)]
+pub enum ConnectError {
+    /// Attempted to create a new connection while the endpoint was not on an entity
+    #[error("The endpoint is not on an entity")]
+    EndpointNotOnEntity,
+    /// An error occurred at the protocol level
+    #[error(transparent)]
+    Proto(#[from] quinn_proto::ConnectError),
+}
 
-impl EndpointBundle {
+/// A QUIC endpoint.
+///
+/// An endpoint corresponds to a single UDP socket, may host many connections,
+/// and may act as both client and server for different connections.
+///
+/// # Usage
+/// ```
+/// # use bevy_ecs::system::{Query, assert_is_system};
+/// # use bevy_quicsilver::Endpoint;
+/// fn my_system(query: Query<&Endpoint>) {
+///     for endpoint in query.iter() {
+///         println!("{}", endpoint.open_connections());
+///     }
+/// }
+/// # assert_is_system(my_system);
+/// ```
+#[derive(Debug)]
+pub struct Endpoint {
+    self_entity: Entity,
+    endpoint: Arc<Mutex<quinn_proto::Endpoint>>,
+    default_client_config: Option<ClientConfig>,
+    connections: HashMap<ConnectionHandle, Entity>,
+    socket: Arc<UdpSocket>,
+    receiver: Receiver<Result<crate::socket::DatagramEvent, std::io::Error>>,
+    ipv6: bool,
+}
+
+impl Component for Endpoint {
+    const STORAGE_TYPE: StorageType = StorageType::Table;
+
+    fn register_component_hooks(hooks: &mut ComponentHooks) {
+        hooks
+            .on_insert(|mut world, entity, _component_id| {
+                // Record which entity we're on so we can pass it to connections
+                let mut this = world.get_mut::<Self>(entity).unwrap();
+                this.self_entity = entity;
+            })
+            .on_replace(|mut world, entity, _component_id| {
+                // Record that we are no longer on an entity
+                let mut this = world.get_mut::<Self>(entity).unwrap();
+                this.self_entity = Entity::PLACEHOLDER;
+            });
+    }
+}
+
+impl Endpoint {
     /// Helper to construct an endpoint for use with outgoing connections, using the default [`EndpointConfig`].
     ///
     /// Note that `local_addr` is the *local* address to bind to, which should usually be a wildcard
@@ -58,11 +110,20 @@ impl EndpointBundle {
     /// IPv6 address on Windows will not by default be able to communicate with IPv4
     /// addresses. Portable applications should bind an address that matches the family they wish to
     /// communicate within.
+    #[must_use = "Endpoints are components and do nothing if not spawned or inserted onto an entity"]
     pub fn new_client(
         local_addr: SocketAddr,
         default_client_config: Option<ClientConfig>,
     ) -> std::io::Result<Self> {
-        EndpointImpl::new_client(local_addr, default_client_config).map(Self)
+        std::net::UdpSocket::bind(local_addr).and_then(|socket| {
+            Self::new(
+                socket,
+                EndpointConfig::default(),
+                default_client_config,
+                None,
+                None,
+            )
+        })
     }
 
     /// Helper to construct an endpoint for use with incoming connections, using the default [`EndpointConfig`].
@@ -78,11 +139,20 @@ impl EndpointBundle {
     /// IPv6 address on Windows will not by default be able to communicate with IPv4
     /// addresses. Portable applications should bind an address that matches the family they wish to
     /// communicate within.
+    #[must_use = "Endpoints are components and do nothing if not spawned or inserted onto an entity"]
     pub fn new_server(
         local_addr: SocketAddr,
         server_config: ServerConfig,
     ) -> std::io::Result<Self> {
-        EndpointImpl::new_server(local_addr, server_config).map(Self)
+        std::net::UdpSocket::bind(local_addr).and_then(|socket| {
+            Self::new(
+                socket,
+                EndpointConfig::default(),
+                None,
+                Some(server_config),
+                None,
+            )
+        })
     }
 
     /// Helper to construct an endpoint for use with both incoming and outgoing connections, using the default [`EndpointConfig`].
@@ -98,242 +168,8 @@ impl EndpointBundle {
     /// IPv6 address on Windows will not by default be able to communicate with IPv4
     /// addresses. Portable applications should bind an address that matches the family they wish to
     /// communicate within.
+    #[must_use = "Endpoints are components and do nothing if not spawned or inserted onto an entity"]
     pub fn new_client_host(
-        local_addr: SocketAddr,
-        default_client_config: ClientConfig,
-        server_config: ServerConfig,
-    ) -> std::io::Result<Self> {
-        EndpointImpl::new_client_host(local_addr, default_client_config, server_config).map(Self)
-    }
-
-    /// Construct an endpoint with the specified socket and configurations.
-    pub fn new(
-        socket: std::net::UdpSocket,
-        config: EndpointConfig,
-        default_client_config: Option<ClientConfig>,
-        server_config: Option<ServerConfig>,
-        rng_seed: Option<[u8; 32]>,
-    ) -> std::io::Result<Self> {
-        EndpointImpl::new(
-            socket,
-            config,
-            default_client_config,
-            server_config,
-            rng_seed,
-        )
-        .map(Self)
-    }
-}
-
-/// A query parameter for a QUIC endpoint.
-/// For available methods when querying entities with this type, see [`EndpointItem`] and [`EndpointReadOnlyItem`].
-///
-/// An endpoint corresponds to a single UDP socket, may host many connections,
-/// and may act as both client and server for different connections.
-///
-/// # Usage
-/// ```
-/// # use bevy_ecs::system::{Query, assert_is_system};
-/// # use bevy_quicsilver::Endpoint;
-/// fn my_system(query: Query<Endpoint>) {
-///     for endpoint in query.iter() {
-///         println!("{}", endpoint.open_connections());
-///     }
-/// }
-/// # assert_is_system(my_system);
-/// ```
-#[derive(QueryData)]
-#[query_data(mutable)]
-pub struct Endpoint {
-    entity: Entity,
-    endpoint: &'static mut EndpointImpl,
-}
-
-impl EndpointItem<'_> {
-    /// Set the default client configuration used by [`Self::connect()`].
-    pub fn set_default_client_config(&mut self, config: ClientConfig) {
-        self.endpoint.set_default_client_config(config);
-    }
-
-    /// Replace the server configuration, affecting new incoming connections only.
-    pub fn set_server_config(&mut self, server_config: Option<ServerConfig>) {
-        self.endpoint.set_server_config(server_config);
-    }
-
-    pub(crate) fn handle_event(
-        &mut self,
-        connection: ConnectionHandle,
-        event: EndpointEvent,
-    ) -> Option<ConnectionEvent> {
-        self.endpoint.handle_event(connection, event)
-    }
-
-    /// Initiate a connection with the remote endpoint identified by the specified address and server name,
-    /// using the default client config.
-    ///
-    /// The exact value of the `server_name` parameter must be included in the `subject_alt_names` field of the server's certificate,
-    /// as described by [`rcgen::generate_simple_self_signed`].
-    #[must_use = "Connections are components and do nothing if not spawned or inserted onto an entity"]
-    pub fn connect(
-        &mut self,
-        server_address: SocketAddr,
-        server_name: &str,
-    ) -> Result<Connecting, ConnectError> {
-        self.endpoint
-            .connect(self.entity, server_address, server_name)
-    }
-
-    /// Initiate a connection with the remote endpoint identified by the specified address and server name,
-    /// using the specified client config.
-    ///
-    /// The exact value of the `server_name` parameter must be included in the `subject_alt_names` field of the server's certificate,
-    /// as described by [`rcgen::generate_simple_self_signed`].
-    #[must_use = "Connections are components and do nothing if not spawned or inserted onto an entity"]
-    pub fn connect_with(
-        &mut self,
-        server_address: SocketAddr,
-        server_name: &str,
-        client_config: ClientConfig,
-    ) -> Result<Connecting, ConnectError> {
-        self.endpoint
-            .connect_with(self.entity, server_address, server_name, client_config)
-    }
-
-    pub(crate) fn accept(
-        &mut self,
-        incoming: quinn_proto::Incoming,
-        server_config: Option<Arc<ServerConfig>>,
-    ) -> Result<(ConnectionHandle, quinn_proto::Connection), ConnectionError> {
-        self.endpoint.accept(incoming, server_config)
-    }
-
-    pub(crate) fn refuse(&mut self, incoming: quinn_proto::Incoming) {
-        self.endpoint.refuse(incoming);
-    }
-
-    pub(crate) fn retry(&mut self, incoming: quinn_proto::Incoming) -> Result<(), RetryError> {
-        self.endpoint.retry(incoming)
-    }
-
-    pub(crate) fn ignore(&mut self, incoming: quinn_proto::Incoming) {
-        self.endpoint.ignore(incoming);
-    }
-
-    /// Switch to a new UDP socket.
-    ///
-    /// Allows the endpoint’s address to be updated live, affecting all active connections.
-    /// Incoming connections and connections to servers unreachable from the new address will be lost.
-    ///
-    /// On error, the old UDP socket is retained.
-    #[expect(dead_code)] // Make pub when implemented
-    fn rebind(&mut self, new_socket: std::net::UdpSocket) -> std::io::Result<()> {
-        self.endpoint.rebind(new_socket)
-    }
-
-    /// Get the local `SocketAddr` the underlying socket is bound to.
-    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
-        self.endpoint.local_addr()
-    }
-
-    /// Get the number of connections that are currently open.
-    pub fn open_connections(&self) -> usize {
-        self.endpoint.open_connections()
-    }
-
-    pub(crate) fn max_gso_segments(&self) -> usize {
-        self.endpoint.max_gso_segments()
-    }
-
-    /// Send some data over the network.
-    pub(crate) fn send(
-        &self,
-        transmit: &quinn_proto::Transmit,
-        buffer: &[u8],
-    ) -> std::io::Result<()> {
-        self.endpoint.send(transmit, buffer)
-    }
-
-    pub(crate) fn knows_connection(&self, connection: ConnectionHandle) -> bool {
-        self.endpoint.knows_connection(connection)
-    }
-
-    pub(crate) fn connection_inserted(&mut self, connection: ConnectionHandle, entity: Entity) {
-        self.endpoint.connection_inserted(connection, entity);
-    }
-}
-
-impl EndpointReadOnlyItem<'_> {
-    /// Get the local `SocketAddr` the underlying socket is bound to.
-    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
-        self.endpoint.local_addr()
-    }
-
-    /// Get the number of connections that are currently open.
-    pub fn open_connections(&self) -> usize {
-        self.endpoint.open_connections()
-    }
-
-    #[expect(dead_code)]
-    pub(crate) fn max_gso_segments(&self) -> usize {
-        self.endpoint.max_gso_segments()
-    }
-
-    /// Send some data over the network.
-    #[expect(dead_code)]
-    pub(crate) fn send(
-        &self,
-        transmit: &quinn_proto::Transmit,
-        buffer: &[u8],
-    ) -> std::io::Result<()> {
-        self.endpoint.send(transmit, buffer)
-    }
-
-    #[expect(dead_code)]
-    pub(crate) fn knows_connection(&self, connection: ConnectionHandle) -> bool {
-        self.endpoint.knows_connection(connection)
-    }
-}
-
-/// Underlying component type behind the [`EndpointBundle`] bundle and [`Endpoint`] querydata types.
-#[derive(Debug, Component)]
-struct EndpointImpl {
-    endpoint: Arc<Mutex<quinn_proto::Endpoint>>,
-    default_client_config: Option<ClientConfig>,
-    connections: HashMap<ConnectionHandle, Entity>,
-    socket: Arc<UdpSocket>,
-    receiver: Receiver<Result<crate::socket::DatagramEvent, std::io::Error>>,
-    ipv6: bool,
-}
-
-impl EndpointImpl {
-    fn new_client(
-        local_addr: SocketAddr,
-        default_client_config: Option<ClientConfig>,
-    ) -> std::io::Result<Self> {
-        std::net::UdpSocket::bind(local_addr).and_then(|socket| {
-            Self::new(
-                socket,
-                EndpointConfig::default(),
-                default_client_config,
-                None,
-                None,
-            )
-        })
-    }
-
-    fn new_server(local_addr: SocketAddr, server_config: ServerConfig) -> std::io::Result<Self> {
-        std::net::UdpSocket::bind(local_addr).and_then(|socket| {
-            Self::new(
-                socket,
-                EndpointConfig::default(),
-                None,
-                Some(server_config),
-                None,
-            )
-        })
-    }
-
-    fn new_client_host(
         local_addr: SocketAddr,
         default_client_config: ClientConfig,
         server_config: ServerConfig,
@@ -349,7 +185,9 @@ impl EndpointImpl {
         })
     }
 
-    fn new(
+    /// Construct an endpoint with the specified socket and configurations.
+    #[must_use = "Endpoints are components and do nothing if not spawned or inserted onto an entity"]
+    pub fn new(
         socket: std::net::UdpSocket,
         config: EndpointConfig,
         default_client_config: Option<ClientConfig>,
@@ -384,6 +222,7 @@ impl EndpointImpl {
                 .detach();
 
             Self {
+                self_entity: Entity::PLACEHOLDER,
                 endpoint,
                 default_client_config,
                 connections: HashMap::default(),
@@ -394,46 +233,41 @@ impl EndpointImpl {
         })
     }
 
-    fn handle_event(
+    /// Initiate a connection with the remote endpoint identified by the specified address and server name,
+    /// using the default client config.
+    ///
+    /// The exact value of the `server_name` parameter must be included in the `subject_alt_names` field of the server's certificate,
+    /// as described by [`rcgen::generate_simple_self_signed`].
+    #[must_use = "Connections are components and do nothing if not spawned or inserted onto an entity"]
+    pub fn connect(
         &mut self,
-        connection: ConnectionHandle,
-        event: EndpointEvent,
-    ) -> Option<ConnectionEvent> {
-        self.endpoint
-            .lock()
-            .unwrap()
-            .handle_event(connection, event)
-    }
-
-    fn knows_connection(&self, connection: ConnectionHandle) -> bool {
-        self.connections.contains_key(&connection)
-    }
-
-    fn connection_inserted(&mut self, connection: ConnectionHandle, entity: Entity) {
-        self.connections.insert(connection, entity);
-    }
-
-    fn connect(
-        &mut self,
-        self_entity: Entity,
         server_address: SocketAddr,
         server_name: &str,
     ) -> Result<Connecting, ConnectError> {
         self.default_client_config
             .clone()
-            .ok_or(ConnectError::NoDefaultClientConfig)
-            .and_then(|client_config| {
-                self.connect_with(self_entity, server_address, server_name, client_config)
-            })
+            .ok_or(quinn_proto::ConnectError::NoDefaultClientConfig.into())
+            .and_then(|client_config| self.connect_with(server_address, server_name, client_config))
     }
 
-    fn connect_with(
+    /// Initiate a connection with the remote endpoint identified by the specified address and server name,
+    /// using the specified client config.
+    ///
+    /// The exact value of the `server_name` parameter must be included in the `subject_alt_names` field of the server's certificate,
+    /// as described by [`rcgen::generate_simple_self_signed`].
+    #[must_use = "Connections are components and do nothing if not spawned or inserted onto an entity"]
+    pub fn connect_with(
         &mut self,
-        self_entity: Entity,
         mut server_address: SocketAddr,
         server_name: &str,
         client_config: ClientConfig,
     ) -> Result<Connecting, ConnectError> {
+        if self.self_entity == Entity::PLACEHOLDER {
+            // If our recorded entity value is still the placeholder, we haven't been inserted onto an entity yet
+            // (Or we were inserted onto and then removed from an entity)
+            return Err(ConnectError::EndpointNotOnEntity);
+        }
+
         let now = Instant::now();
 
         // Handle mismatched address families, not handling this can cause the connection to silently fail
@@ -449,7 +283,9 @@ impl EndpointImpl {
                     server_address = (v4, addr.port()).into();
                 } else {
                     // Target is a normal IPv6 address, can't be handled by an IPv4 stack
-                    return Err(ConnectError::InvalidRemoteAddress(server_address));
+                    return Err(
+                        quinn_proto::ConnectError::InvalidRemoteAddress(server_address).into(),
+                    );
                 }
             }
             _ => {} // Address family matches already, no problem
@@ -459,10 +295,11 @@ impl EndpointImpl {
             .lock()
             .unwrap()
             .connect(now, client_config, server_address, server_name)
-            .map(|(handle, connection)| Connecting::new(self_entity, handle, connection))
+            .map(|(handle, connection)| Connecting::new(self.self_entity, handle, connection))
+            .map_err(Into::into)
     }
 
-    fn accept(
+    pub(crate) fn accept(
         &mut self,
         incoming: quinn_proto::Incoming,
         server_config: Option<Arc<ServerConfig>>,
@@ -485,7 +322,7 @@ impl EndpointImpl {
             })
     }
 
-    fn refuse(&mut self, incoming: quinn_proto::Incoming) {
+    pub(crate) fn refuse(&mut self, incoming: quinn_proto::Incoming) {
         let mut response_buffer = Vec::new();
         let transmit = self
             .endpoint
@@ -495,7 +332,7 @@ impl EndpointImpl {
         self.send_response(&transmit, &response_buffer);
     }
 
-    fn retry(&mut self, incoming: quinn_proto::Incoming) -> Result<(), RetryError> {
+    pub(crate) fn retry(&mut self, incoming: quinn_proto::Incoming) -> Result<(), RetryError> {
         let mut response_buffer = Vec::new();
         self.endpoint
             .lock()
@@ -504,7 +341,7 @@ impl EndpointImpl {
             .map(|transmit| self.send_response(&transmit, &response_buffer))
     }
 
-    fn ignore(&mut self, incoming: quinn_proto::Incoming) {
+    pub(crate) fn ignore(&mut self, incoming: quinn_proto::Incoming) {
         self.endpoint.lock().unwrap().ignore(incoming);
     }
 
@@ -514,59 +351,90 @@ impl EndpointImpl {
         let _ = self.send(transmit, buffer);
     }
 
-    fn send(&self, transmit: &quinn_proto::Transmit, buffer: &[u8]) -> std::io::Result<()> {
+    /// Send some data over the network.
+    pub(crate) fn send(
+        &self,
+        transmit: &quinn_proto::Transmit,
+        buffer: &[u8],
+    ) -> std::io::Result<()> {
         self.socket.send(&udp_transmit(transmit, buffer))
     }
 
-    fn set_default_client_config(&mut self, config: ClientConfig) {
+    pub(crate) fn handle_event(
+        &mut self,
+        connection: ConnectionHandle,
+        event: EndpointEvent,
+    ) -> Option<ConnectionEvent> {
+        self.endpoint
+            .lock()
+            .unwrap()
+            .handle_event(connection, event)
+    }
+
+    pub(crate) fn knows_connection(&self, connection: ConnectionHandle) -> bool {
+        self.connections.contains_key(&connection)
+    }
+
+    pub(crate) fn connection_inserted(&mut self, connection: ConnectionHandle, entity: Entity) {
+        self.connections.insert(connection, entity);
+    }
+
+    /// Set the default client configuration used by [`Self::connect()`].
+    pub fn set_default_client_config(&mut self, config: ClientConfig) {
         self.default_client_config = Some(config);
     }
 
-    fn set_server_config(&mut self, server_config: Option<ServerConfig>) {
+    /// Replace the server configuration, affecting new incoming connections only.
+    pub fn set_server_config(&mut self, server_config: Option<ServerConfig>) {
         self.endpoint
             .lock()
             .unwrap()
             .set_server_config(server_config.map(Arc::new));
     }
 
+    /// Switch to a new UDP socket.
+    ///
+    /// Allows the endpoint’s address to be updated live, affecting all active connections.
+    /// Incoming connections and connections to servers unreachable from the new address will be lost.
+    ///
+    /// On error, the old UDP socket is retained.
+    #[expect(dead_code)] // Make pub when implemented
     fn rebind(&mut self, _new_socket: std::net::UdpSocket) -> std::io::Result<()> {
         todo!()
     }
 
-    fn local_addr(&self) -> std::io::Result<SocketAddr> {
+    /// Get the local `SocketAddr` the underlying socket is bound to.
+    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
         self.socket.local_addr()
     }
 
-    fn open_connections(&self) -> usize {
+    /// Get the number of connections that are currently open.
+    pub fn open_connections(&self) -> usize {
         self.connections.len()
     }
 
-    fn max_gso_segments(&self) -> usize {
+    pub(crate) fn max_gso_segments(&self) -> usize {
         self.socket.max_gso_segments()
     }
 }
 
 pub(crate) fn poll_endpoints(
     mut commands: Commands,
-    mut endpoint_query: Query<(Endpoint, Has<KeepAlive>)>,
+    mut endpoint_query: Query<(Entity, &mut Endpoint, Has<KeepAlive>)>,
     mut connection_query: Query<(Entity, ConnectionQuery)>,
 ) {
-    for (
-        EndpointItem {
-            entity: endpoint_entity,
-            endpoint: mut endpoint_impl,
-        },
-        keepalive,
-    ) in &mut endpoint_query
-    {
-        let EndpointImpl {
+    for (endpoint_entity, mut ecs_endpoint, keepalive) in &mut endpoint_query {
+        debug_assert_eq!(endpoint_entity, ecs_endpoint.self_entity);
+
+        let Endpoint {
+            self_entity: _,
             endpoint,
             default_client_config: _,
             connections,
             socket: _,
             receiver,
             ipv6: _,
-        } = &mut *endpoint_impl;
+        } = &mut *ecs_endpoint;
 
         let mut transmits = Vec::new();
 
@@ -620,7 +488,7 @@ pub(crate) fn poll_endpoints(
                     commands.trigger_targets(EndpointError::IoError(e), endpoint_entity);
                     commands
                         .entity(endpoint_entity)
-                        .remove_or_despawn::<EndpointImpl>(keepalive);
+                        .remove_or_despawn::<Endpoint>(keepalive);
                 }
             }
         }
@@ -628,7 +496,7 @@ pub(crate) fn poll_endpoints(
         drop(endpoint);
 
         for (transmit, buffer) in transmits {
-            endpoint_impl.send_response(&transmit, &buffer);
+            ecs_endpoint.send_response(&transmit, &buffer);
         }
     }
 }
@@ -674,7 +542,7 @@ mod tests {
         Incoming, IncomingResponse,
     };
 
-    use super::{Endpoint, EndpointBundle, EndpointError};
+    use super::{Endpoint, EndpointError};
 
     #[derive(Debug, Resource, Default)]
     struct ConnectionEstablishedEntities(Vec<Entity>);
@@ -702,9 +570,9 @@ mod tests {
 
         app.world_mut().entity_mut(connections.endpoint).observe(
             move |trigger: Trigger<EndpointError>,
-                  mut endpoint: Query<Endpoint>,
+                  endpoint: Query<&Endpoint>,
                   mut res: ResMut<HasObserverTriggered>| {
-                let _ = endpoint.get_mut(trigger.entity()).unwrap();
+                let _ = endpoint.get(trigger.entity()).unwrap();
                 assert!(matches!(
                     trigger.event(),
                     &EndpointError::MalformedConnectionEntity(e) if e == connections.server
@@ -735,9 +603,9 @@ mod tests {
 
         app.world_mut().entity_mut(connections.endpoint).observe(
             move |trigger: Trigger<EndpointError>,
-                  mut endpoint: Query<Endpoint>,
+                  endpoint: Query<&Endpoint>,
                   mut res: ResMut<HasObserverTriggered>| {
-                let _ = endpoint.get_mut(trigger.entity()).unwrap();
+                let _ = endpoint.get(trigger.entity()).unwrap();
                 assert!(matches!(
                     trigger.event(),
                     &EndpointError::MissingConnectionEntity(e) if e == connections.server
@@ -773,7 +641,7 @@ mod tests {
             // Get the `SocketAddr` that the client should connect to
             let server_addr = $server_app
                 .world_mut()
-                .query::<Endpoint>()
+                .query::<&Endpoint>()
                 .get($server_app.world(), $server_endpoint_entity)
                 .unwrap()
                 .local_addr()
@@ -782,7 +650,7 @@ mod tests {
             // Initiate connection from client to server
             let client_connection = $client_app
                 .world_mut()
-                .query::<Endpoint>()
+                .query::<&mut Endpoint>()
                 .get_mut($client_app.world_mut(), $client_endpoint_entity)
                 .unwrap()
                 .connect(server_addr, "localhost")
@@ -931,8 +799,8 @@ mod tests {
         let addr = (Ipv6Addr::LOCALHOST, 0).into();
 
         let (client, server) = generate_crypto();
-        let client = EndpointBundle::new_client(addr, Some(client)).unwrap();
-        let server = EndpointBundle::new_server(addr, server).unwrap();
+        let client = Endpoint::new_client(addr, Some(client)).unwrap();
+        let server = Endpoint::new_server(addr, server).unwrap();
 
         let client_endpoint = app.world_mut().spawn(client).id();
         let server_endpoint = app.world_mut().spawn(server).id();
@@ -960,8 +828,8 @@ mod tests {
         let addr = (Ipv6Addr::LOCALHOST, 0).into();
 
         let (client, server) = generate_crypto();
-        let client = EndpointBundle::new_client(addr, Some(client)).unwrap();
-        let server = EndpointBundle::new_server(addr, server).unwrap();
+        let client = Endpoint::new_client(addr, Some(client)).unwrap();
+        let server = Endpoint::new_server(addr, server).unwrap();
 
         let client_endpoint = client_app.world_mut().spawn(client).id();
         let server_endpoint = server_app.world_mut().spawn(server).id();

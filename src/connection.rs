@@ -725,7 +725,7 @@ impl ConnectionImpl {
 pub(crate) fn poll_connections(
     mut commands: Commands,
     mut query: Query<(Entity, ConnectionQuery, Has<KeepAlive>)>,
-    mut endpoint: Query<Endpoint>,
+    mut endpoint: Query<&mut Endpoint>,
     time: Res<Time<Real>>,
 ) {
     let now = Instant::now();

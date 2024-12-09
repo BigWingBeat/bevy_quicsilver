@@ -12,8 +12,8 @@ use bevy_ecs::{
     system::{Commands, Query},
 };
 use bevy_quicsilver::{
-    Connecting, ConnectingError, Connection, ConnectionError, ConnectionEstablished,
-    EndpointBundle, Incoming, IncomingResponse, NewIncoming, QuicPlugin, ServerConfig, StreamId,
+    Connecting, ConnectingError, Connection, ConnectionError, ConnectionEstablished, Endpoint,
+    Incoming, IncomingResponse, NewIncoming, QuicPlugin, ServerConfig, StreamId,
 };
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 
@@ -49,7 +49,7 @@ fn spawn_endpoint(mut commands: Commands) {
     // If we specified 0 as the port, the OS would assign some random port number.
     // For the sake of this example, the port number is hardcoded
     commands.spawn(
-        EndpointBundle::new_server(
+        Endpoint::new_server(
             (Ipv6Addr::UNSPECIFIED, 4433).into(),
             ServerConfig::with_single_cert(cert, key).unwrap(),
         )

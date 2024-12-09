@@ -12,7 +12,7 @@ use bevy_ecs::{
 };
 use bevy_quicsilver::{
     ClientConfig, ConnectingError, Connection, ConnectionDrained, ConnectionError,
-    ConnectionEstablished, Endpoint, EndpointBundle, QuicPlugin, RecvError, StreamId, VarInt,
+    ConnectionEstablished, Endpoint, QuicPlugin, RecvError, StreamId, VarInt,
 };
 use bevy_state::{
     app::{AppExtStates, StatesPlugin},
@@ -59,7 +59,7 @@ fn spawn_endpoint(mut commands: Commands) {
 
     // Use a wildcard IP and port for the local socket address
     commands.spawn(
-        EndpointBundle::new_client(
+        Endpoint::new_client(
             (Ipv6Addr::UNSPECIFIED, 0).into(),
             Some(ClientConfig::with_root_certificates(Arc::new(roots)).unwrap()),
         )
@@ -93,7 +93,7 @@ fn read_crypto() -> RootCertStore {
     roots
 }
 
-fn connect_to_server(mut commands: Commands, mut endpoint: Query<Endpoint>) {
+fn connect_to_server(mut commands: Commands, mut endpoint: Query<&mut Endpoint>) {
     let mut endpoint = endpoint.get_single_mut().unwrap();
 
     // Connect to localhost as the server example should also be running on the same local machine

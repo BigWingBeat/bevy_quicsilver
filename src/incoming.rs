@@ -7,7 +7,6 @@ use bevy_ecs::{
     component::{Component, ComponentHooks, StorageType},
     entity::Entity,
     event::{Event, EventReader},
-    query::{QueryEntityError, QueryState},
     system::SystemState,
     world::{error::EntityFetchError, World},
 };
@@ -186,7 +185,6 @@ impl Incoming {
 
 pub(crate) fn handle_incoming_responses(
     world: &mut World,
-    endpoints: &mut QueryState<Endpoint>,
     response_events: &mut SystemState<EventReader<IncomingResponse>>,
 ) {
     let responses = response_events
@@ -217,15 +215,12 @@ pub(crate) fn handle_incoming_responses(
         let incoming = incoming.incoming;
 
         let result = incoming_entity.world_scope(|world| {
-            let mut endpoint = match endpoints.get_mut(world, endpoint_entity) {
-                Ok(endpoint) => endpoint,
-                Err(
-                    QueryEntityError::QueryDoesNotMatch(..) | QueryEntityError::NoSuchEntity(_),
-                ) => {
+            let mut endpoint = match world.get_mut::<Endpoint>(endpoint_entity) {
+                Some(endpoint) => endpoint,
+                None => {
                     // If the endpoint does not exist anymore, neither should we
                     return Ok(None);
                 }
-                Err(QueryEntityError::AliasedMutability(_)) => unreachable!(),
             };
 
             match response.response {
@@ -359,7 +354,7 @@ mod tests {
 
         let mut endpoint = app
             .world_mut()
-            .query::<Endpoint>()
+            .query::<&mut Endpoint>()
             .single_mut(app.world_mut());
 
         let addr = endpoint.local_addr().unwrap();

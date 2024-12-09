@@ -4,7 +4,7 @@ use bevy::prelude::{error, info, Component, Query, Res, Resource, Trigger, World
 use bevy_app::{App, Plugin};
 use bevy_quicsilver::{
     crypto::ClientConfigExt, ConnectingError, Connection, ConnectionError, ConnectionEstablished,
-    Endpoint, EndpointBundle, EndpointError, IncomingError,
+    Endpoint, EndpointError, IncomingError,
 };
 use bevy_state::state::OnEnter;
 use bincode::{DefaultOptions, Options};
@@ -52,11 +52,13 @@ fn start_client(world: &mut World) {
     let address = SocketAddr::new(address, PORT);
 
     let endpoint =
-        EndpointBundle::new_client((Ipv6Addr::UNSPECIFIED, 0).into(), Some(setup_crypto()))
-            .unwrap();
+        Endpoint::new_client((Ipv6Addr::UNSPECIFIED, 0).into(), Some(setup_crypto())).unwrap();
 
     world.spawn(endpoint);
-    let mut endpoint = world.query::<Endpoint>().get_single_mut(world).unwrap();
+    let mut endpoint = world
+        .query::<&mut Endpoint>()
+        .get_single_mut(world)
+        .unwrap();
     match endpoint.connect(address, CERT_NAME) {
         Ok(connection) => {
             world

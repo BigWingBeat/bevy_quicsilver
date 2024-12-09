@@ -6,8 +6,8 @@ use bevy::prelude::{
 };
 use bevy_app::{App, Plugin, Update};
 use bevy_quicsilver::{
-    ConnectingError, Connection, ConnectionError, ConnectionEstablished, EndpointBundle,
-    EndpointError, Incoming, IncomingError, IncomingResponse, NewIncoming,
+    ConnectingError, Connection, ConnectionError, ConnectionEstablished, Endpoint, EndpointError,
+    Incoming, IncomingError, IncomingResponse, NewIncoming,
 };
 use bevy_state::state::OnEnter;
 use bincode::{DefaultOptions, Options};
@@ -70,7 +70,7 @@ fn start_server(mut commands: Commands) {
 
     let server_config = ServerConfig::with_single_cert(vec![cert], key).unwrap();
 
-    let endpoint = EndpointBundle::new_client_host(
+    let endpoint = Endpoint::new_client_host(
         (Ipv6Addr::UNSPECIFIED, PORT).into(),
         client_config,
         server_config,
