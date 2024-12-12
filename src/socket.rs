@@ -134,46 +134,43 @@ impl UdpSocketRecvDriver {
 impl Future for UdpSocketRecvDriver {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // Wake the task when the socket has data to be read
-        if let Err(e) = ready!(self.socket.socket.poll_readable(cx)) {
-            let _ = self.sender.send(Err(e));
-            return Poll::Ready(());
-        }
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // Loop until `poll_readable` returns pending, or an error terminates the task
+        loop {
+            // Wake the task when the socket has data to be read
+            if let Err(e) = ready!(self.socket.socket.poll_readable(cx)) {
+                let _ = self.sender.send(Err(e));
+                return Poll::Ready(());
+            }
 
-        let now = Instant::now();
-        let this = self.get_mut();
-        let mut endpoint = this.endpoint.lock().unwrap();
+            let now = Instant::now();
+            let this = self.as_mut().get_mut();
+            let mut endpoint = this.endpoint.lock().unwrap();
 
-        match this.socket.receive(&mut this.receive_buffer, |meta, data| {
-            let mut response_buffer = Vec::new();
-            endpoint
-                .handle(
-                    now,
-                    meta.addr,
-                    meta.dst_ip,
-                    meta.ecn.map(proto_ecn),
-                    data,
-                    &mut response_buffer,
-                )
-                .map_or(Ok(()), |event| {
-                    this.sender
-                        .send(Ok(DatagramEvent {
-                            event,
-                            response_buffer,
-                        }))
-                        // Channel disconnected == endpoint dropped, kill the driver
-                        .map_err(std::io::Error::other)
-                })
-        }) {
-            Err(e) => {
+            if let Err(e) = this.socket.receive(&mut this.receive_buffer, |meta, data| {
+                let mut response_buffer = Vec::new();
+                endpoint
+                    .handle(
+                        now,
+                        meta.addr,
+                        meta.dst_ip,
+                        meta.ecn.map(proto_ecn),
+                        data,
+                        &mut response_buffer,
+                    )
+                    .map_or(Ok(()), |event| {
+                        this.sender
+                            .send(Ok(DatagramEvent {
+                                event,
+                                response_buffer,
+                            }))
+                            // Channel disconnected == endpoint dropped, kill the driver
+                            .map_err(std::io::Error::other)
+                    })
+            }) {
                 // This erroring == channel disconnected, nowhere to send the error
                 let _ = this.sender.send(Err(e));
-                Poll::Ready(())
-            }
-            Ok(()) => {
-                cx.waker().wake_by_ref();
-                Poll::Pending
+                return Poll::Ready(());
             }
         }
     }
