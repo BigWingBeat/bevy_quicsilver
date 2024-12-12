@@ -171,7 +171,10 @@ impl Future for UdpSocketRecvDriver {
                 let _ = this.sender.send(Err(e));
                 Poll::Ready(())
             }
-            Ok(()) => Poll::Pending,
+            Ok(()) => {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
         }
     }
 }
