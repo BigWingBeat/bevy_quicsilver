@@ -27,8 +27,9 @@ rcgen = { version = "0.13", default-features = false, features = ["crypto", "rin
 x509-parser = { version = "0.16", default-features = false }
 
 [features]
-default = ["platform-verifier"]
-platform-verifier = ["quinn-proto/platform-verifier"]
+default = ["platform_verifier"]
+platform_verifier = ["quinn-proto/platform-verifier"]
+multi_threaded = ["bevy_tasks/multi_threaded"]
 
 [dev-dependencies]
 # For writing and reading self-signed certificates in examples

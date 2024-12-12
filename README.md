@@ -31,3 +31,10 @@ This library is still very new and in active development. Breaking changes will 
 - Cross-platform
 
 `bevy_quicsilver` is a low-level networking library that offers granular control over connections and data transfer. Implementing higher-level features such as ser/deserialization, specific network topologies, automatic state transfer, etc. are out of scope for the library.
+
+## Crate Features
+
+| `default` | `platform_verifier` |
+|---|---|
+| `platform_verifier` | Enables the `with_platform_verifier` constructor for `ClientConfig`, which uses [`rustls-platform-verifier`](https://crates.io/crates/rustls-platform-verifier) for verifying server certificates. |
+| `multi_threaded` | Enables the `multi_threaded` feature for `bevy_tasks` and takes advantage of it to improve RTT latency estimates. |
