@@ -207,7 +207,7 @@ impl Endpoint {
                 rng_seed,
             )));
 
-            let (sender, receiver) = crossbeam_channel::bounded(32);
+            let (sender, receiver) = crossbeam_channel::unbounded();
 
             // Receiving data is done in a dedicated task to minimize latency between data arriving and being processed
             let driver = UdpSocketRecvDriver::new(
