@@ -16,6 +16,8 @@ use thiserror::Error;
 use crate::{connection::ConnectionAccepted, endpoint::Endpoint, Connecting, KeepAlive};
 
 /// An observer trigger that is fired whenever an [`Incoming`] component on an entity encounters an error.
+///
+/// Be aware that the target entity will never have an [`Incoming`] component when this is fired.
 #[derive(Debug, Error, Event)]
 pub enum IncomingError {
     /// An [`IncomingResponse`] event was raised for an entity that does not have an [`Incoming`] component
@@ -39,6 +41,8 @@ pub struct NewIncoming;
 
 /// An event type that specifies how to respond to an incoming client connection.
 ///
+/// Once a response has been sent for an entity, the [`Incoming`] component will be removed, and the response will be handled.
+///
 /// Errors if the specified entity does not exist, or does not have an [`Incoming`] component.
 #[derive(Debug, Clone, Event)]
 #[must_use = "IncomingResponse is an event type and does nothing if not written to an EventWriter"]
@@ -58,6 +62,9 @@ enum IncomingResponseType {
 impl IncomingResponse {
     /// Attempt to accept this incoming connection. If no errors occur, the [`Incoming`] component on the specified entity will
     /// be replaced with a [`Connecting`](crate::Connecting) component, and a [`ConnectionAccepted`] event will be fired.
+    ///
+    /// If an error occurrs, an [`IncomingError`] trigger will be fired, and then, if the entity does not have a [`KeepAlive`]
+    /// component, it will be despawned.
     pub fn accept(entity: Entity) -> Self {
         Self {
             entity,
@@ -68,6 +75,9 @@ impl IncomingResponse {
     /// Attempt to accept this incoming connection, using a custom configuration.
     /// If no errors occur, the [`Incoming`] component on the specified entity will be replaced with a [`Connecting`](crate::Connecting)
     /// component, and a [`ConnectionAccepted`] event will be fired.
+    ///
+    /// If an error occurrs, an [`IncomingError`] trigger will be fired, and then, if the entity does not have a [`KeepAlive`]
+    /// component, it will be despawned.
     pub fn accept_with(entity: Entity, config: Arc<ServerConfig>) -> Self {
         Self {
             entity,
@@ -86,8 +96,10 @@ impl IncomingResponse {
 
     /// Respond with a retry packet, requiring the client to retry with address validation.
     ///
-    /// Errors if [`Incoming::remote_address_validated()`] is true,
-    /// otherwise despawns the specified entity, unless it has a [`KeepAlive`] component,
+    /// If [`Incoming::remote_address_validated()`] is true, an [`IncomingError`] trigger will be fired,
+    /// and no retry packet will be sent.
+    ///
+    /// Regardless of any errors, the specified entity will be despawned, unless it has a [`KeepAlive`] component,
     /// in which case only the [`Incoming`] component will be removed from it.
     pub fn retry(entity: Entity) -> Self {
         Self {
@@ -107,7 +119,7 @@ impl IncomingResponse {
     }
 }
 
-/// A new incoming connection from a client.
+/// A new incoming connection from a client. Handle this by sending an [`IncomingResponse`] event.
 ///
 /// # Usage
 /// ```
@@ -140,6 +152,7 @@ impl Component for Incoming {
     const STORAGE_TYPE: StorageType = StorageType::Table;
 
     fn register_component_hooks(hooks: &mut ComponentHooks) {
+        // TODO: Move trigger to endpoint spawn command, so it doesn't trigger from user moving the incoming between entities
         hooks.on_add(|mut world, entity, _component_id| {
             world.trigger_targets(NewIncoming, entity);
         });
@@ -259,7 +272,10 @@ pub(crate) fn handle_incoming_responses(
             }
             // Connection failed
             Err(error) => {
-                world.trigger_targets(error, incoming_entity_id);
+                incoming_entity.trigger(error);
+                if !incoming_entity.contains::<KeepAlive>() {
+                    incoming_entity.despawn();
+                }
             }
         }
     }
