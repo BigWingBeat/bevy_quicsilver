@@ -59,6 +59,7 @@ pub struct ConnectionAccepted;
 #[derive(Debug, bevy_ecs::event::Event)]
 pub struct ConnectionEstablished;
 
+// TODO: Can fire for both `Connecting` and `Connection`?
 /// An observer trigger that is fired when a connection has been fully closed, and is just about to be despawned.
 #[derive(Debug, bevy_ecs::event::Event)]
 pub struct ConnectionDrained;
