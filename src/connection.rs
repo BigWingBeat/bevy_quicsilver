@@ -830,7 +830,9 @@ pub(crate) fn poll_connections(
                     Event::Connected => {
                         commands.entity(entity).queue(|mut entity: EntityWorldMut| {
                             if let Some(Connecting(connection)) = entity.take() {
-                                entity.insert(Connection(connection));
+                                entity
+                                    .insert(Connection(connection))
+                                    .trigger(ConnectionEstablished);
                             }
                         });
                     }
