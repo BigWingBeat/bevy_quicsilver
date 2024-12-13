@@ -59,6 +59,16 @@ pub struct ConnectionAccepted;
 #[derive(Debug, bevy_ecs::event::Event)]
 pub struct ConnectionEstablished;
 
+/// An observer trigger that is fired for a connection when the peer opens a new bidirectional stream.
+/// After this trigger is fired, [`Connection::accept_bi`] will return `Some`.
+#[derive(Debug, bevy_ecs::event::Event)]
+pub struct NewBidirectionalStream;
+
+/// An observer trigger that is fired for a connection when the peer opens a new unidirectional stream.
+/// After this trigger is fired, [`Connection::accept_uni`] will return `Some`.
+#[derive(Debug, bevy_ecs::event::Event)]
+pub struct NewUnidirectionalStream;
+
 // TODO: Can fire for both `Connecting` and `Connection`?
 /// An observer trigger that is fired when a connection has been fully closed, and is just about to be despawned.
 #[derive(Debug, bevy_ecs::event::Event)]
@@ -843,6 +853,10 @@ pub(crate) fn poll_connections(
                             commands.trigger_targets(ConnectingError::Lost(reason), entity);
                         }
                     }
+                    Event::Stream(StreamEvent::Opened { dir }) => match dir {
+                        Dir::Bi => commands.trigger_targets(NewBidirectionalStream, entity),
+                        Dir::Uni => commands.trigger_targets(NewUnidirectionalStream, entity),
+                    },
                     Event::Stream(StreamEvent::Writable { id }) => streams_to_flush.push(id),
                     Event::DatagramsUnblocked => connection.flush_pending_datagrams(),
                     _ => {}
