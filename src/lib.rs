@@ -70,10 +70,11 @@ mod tests {
         entity::Entity, event::Event, observer::Trigger, query::With, system::IntoObserverSystem,
     };
     use quinn_proto::{ClientConfig, ServerConfig};
-    use rustls::{pki_types::PrivateKeyDer, RootCertStore};
+    use rustls::RootCertStore;
 
     use crate::{
         connection::{ConnectingError, ConnectionError},
+        crypto::ServerConfigExt,
         endpoint::EndpointError,
         incoming::IncomingError,
         ConnectionEstablished, Endpoint, Incoming, IncomingResponse, NewIncoming, QuicPlugin,
@@ -179,12 +180,7 @@ mod tests {
 
         (
             ClientConfig::with_root_certificates(Arc::new(roots)).unwrap(),
-            // TODO: helper method for this
-            ServerConfig::with_single_cert(
-                vec![key.cert.der().clone()],
-                PrivateKeyDer::Pkcs8(key.key_pair.serialize_der().into()),
-            )
-            .unwrap(),
+            ServerConfig::with_rcgen_cert(key).unwrap(),
         )
     }
 

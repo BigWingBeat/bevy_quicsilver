@@ -36,11 +36,14 @@ rustls = { version = "0.23", default-features = false, features = ["logging", "s
 ring = { version = "0.17", default-features = false }
 # For parsing cert validity for TOFU verification
 x509-parser = { version = "0.16", default-features = false }
+# For the helper method enabled by the rcgen_cert feature
+rcgen = { version = "0.13", default-features = false, features = ["crypto", "ring"], optional = true }
 
 [features]
 default = ["platform_verifier"]
 platform_verifier = ["quinn-proto/platform-verifier"]
 multi_threaded = ["bevy_tasks/multi_threaded"]
+rcgen_cert = ["dep:rcgen"]
 
 [dev-dependencies]
 # For generating self-signed certificates for tests and examples
