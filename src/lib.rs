@@ -58,14 +58,16 @@ impl KeepAliveEntityCommandsExt for EntityCommands<'_> {
 /// Helper functions for tests
 #[cfg(test)]
 mod tests {
-    use std::{any::TypeId, error::Error, net::Ipv6Addr, sync::Arc};
+    use std::{
+        any::TypeId,
+        error::Error,
+        net::Ipv6Addr,
+        sync::{Arc, Once},
+    };
 
     use bevy_app::App;
     use bevy_ecs::{
-        entity::Entity,
-        observer::Trigger,
-        query::{QueryData, With},
-        system::{Query, ResMut, Resource},
+        entity::Entity, event::Event, observer::Trigger, query::With, system::IntoObserverSystem,
     };
     use quinn_proto::{ClientConfig, ServerConfig};
     use rustls::{pki_types::PrivateKeyDer, RootCertStore};
@@ -74,7 +76,7 @@ mod tests {
         connection::{ConnectingError, ConnectionError},
         endpoint::EndpointError,
         incoming::IncomingError,
-        Endpoint, Incoming, IncomingResponse, QuicPlugin,
+        ConnectionEstablished, Endpoint, Incoming, IncomingResponse, NewIncoming, QuicPlugin,
     };
 
     #[derive(Debug)]
@@ -82,17 +84,6 @@ mod tests {
         pub(crate) endpoint: Entity,
         pub(crate) client: Entity,
         pub(crate) server: Entity,
-    }
-
-    #[derive(Resource, Default)]
-    pub(crate) struct HasObserverTriggered(pub(crate) bool);
-
-    impl Drop for HasObserverTriggered {
-        fn drop(&mut self) {
-            if !self.0 {
-                panic!("Observer was not triggered")
-            }
-        }
     }
 
     pub(crate) fn panic_on_trigger<T: Error>(trigger: Trigger<T>) {
@@ -103,13 +94,46 @@ mod tests {
         );
     }
 
-    pub(crate) fn test_observer<T, C: QueryData>(
-        trigger: Trigger<T>,
-        query: Query<C>,
-        mut res: ResMut<HasObserverTriggered>,
+    pub(crate) fn wait_for_observer<E: Event, M>(
+        app: &mut App,
+        entity: Option<Entity>,
+        observer: impl IntoObserverSystem<E, (), M>,
+        expected_updates: Option<u16>,
+        otherwise: &str,
     ) {
-        let _ = query.get(trigger.entity()).unwrap();
-        res.0 = true;
+        let has_run = Arc::new(Once::new());
+
+        {
+            let has_run = has_run.clone();
+            if let Some(entity) = entity {
+                app.world_mut()
+                    .entity_mut(entity)
+                    .observe(observer)
+                    .observe(move |_trigger: Trigger<E>| {
+                        has_run.call_once(|| {});
+                    });
+            } else {
+                app.world_mut().add_observer(observer);
+                app.world_mut().add_observer(move |_trigger: Trigger<E>| {
+                    has_run.call_once(|| {});
+                });
+            }
+        }
+
+        // If `Some`, the observer should trigger in an exact number of updates.
+        // If `None`, it's inconsistent (I/O etc.) and just needs to trigger in a reasonable amount of time
+        for i in 0..expected_updates.unwrap_or(u16::MAX) {
+            app.update();
+            if has_run.is_completed() {
+                // i here is 1 less than the actual number of times this loop runs
+                if expected_updates.is_some_and(|updates| updates != (i + 1)) {
+                    panic!("{}", otherwise);
+                }
+                return;
+            }
+        }
+
+        panic!("{}", otherwise);
     }
 
     pub(crate) fn app() -> App {
@@ -155,6 +179,7 @@ mod tests {
 
         (
             ClientConfig::with_root_certificates(Arc::new(roots)).unwrap(),
+            // TODO: helper method for this
             ServerConfig::with_single_cert(
                 vec![key.cert.der().clone()],
                 PrivateKeyDer::Pkcs8(key.key_pair.serialize_der().into()),
@@ -182,8 +207,13 @@ mod tests {
         let connecting = endpoint.connect(addr, "localhost").unwrap();
         let client = app.world_mut().spawn(connecting).id();
 
-        app.update();
-        app.update();
+        wait_for_observer(
+            app,
+            None,
+            |_: Trigger<NewIncoming>| {},
+            None,
+            "Incoming did not spawn",
+        );
 
         let server = app
             .world_mut()
@@ -203,9 +233,15 @@ mod tests {
         app.world_mut()
             .send_event(IncomingResponse::accept(entities.server));
 
-        app.update();
-        app.update();
-        app.update();
+        // Client establishes first, sends packet to server, then server establishes second.
+        // So, wait for server to establish, then we know both client and server are established
+        wait_for_observer(
+            app,
+            Some(entities.server),
+            |_: Trigger<ConnectionEstablished>| {},
+            None,
+            "ConnectionEstablished did not fire",
+        );
 
         entities
     }

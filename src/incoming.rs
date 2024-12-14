@@ -283,7 +283,7 @@ pub(crate) fn handle_incoming_responses(
 
 #[cfg(test)]
 mod tests {
-    use bevy_ecs::{entity::Entity, observer::Trigger, query::With, system::ResMut};
+    use bevy_ecs::{entity::Entity, observer::Trigger, query::With};
 
     use crate::{tests::*, Endpoint, KeepAlive};
 
@@ -292,55 +292,58 @@ mod tests {
     #[test]
     fn malformed_entity_error() {
         let mut app = app_one_error::<IncomingError>();
-        app.init_resource::<HasObserverTriggered>();
 
         let entity = app.world_mut().spawn_empty().id();
 
         app.world_mut().send_event(IncomingResponse::accept(entity));
 
-        app.world_mut().entity_mut(entity).observe(
-            |trigger: Trigger<IncomingError>, mut res: ResMut<HasObserverTriggered>| {
+        wait_for_observer(
+            &mut app,
+            Some(entity),
+            |trigger: Trigger<IncomingError>| {
                 assert!(matches!(trigger.event(), IncomingError::MalformedEntity));
-                res.0 = true;
             },
+            Some(1),
+            "IncomingError did not trigger",
         );
-
-        app.update();
     }
 
     #[test]
     fn missing_entity_error() {
         let mut app = app_one_error::<IncomingError>();
-        app.init_resource::<HasObserverTriggered>();
 
         let entity = Entity::PLACEHOLDER;
 
         app.world_mut().send_event(IncomingResponse::accept(entity));
 
-        app.add_observer(
-            move |trigger: Trigger<IncomingError>, mut res: ResMut<HasObserverTriggered>| {
+        wait_for_observer(
+            &mut app,
+            None,
+            move |trigger: Trigger<IncomingError>| {
                 assert_eq!(trigger.entity(), entity);
                 assert!(matches!(trigger.event(), IncomingError::MissingEntity));
-                res.0 = true;
             },
+            Some(1),
+            "IncomingError did not trigger",
         );
-
-        app.update();
     }
 
     #[test]
     fn retry_error() {
         let mut app = app_one_error::<IncomingError>();
-        app.init_resource::<HasObserverTriggered>();
 
         let connections = incoming(&mut app);
 
         app.world_mut()
             .send_event(IncomingResponse::retry(connections.server));
 
-        app.update();
-        app.update();
-        app.update();
+        wait_for_observer(
+            &mut app,
+            None,
+            |_: Trigger<NewIncoming>| {},
+            None,
+            "Incoming did not reappear after retry",
+        );
 
         let incoming = app
             .world_mut()
@@ -350,20 +353,20 @@ mod tests {
         app.world_mut()
             .send_event(IncomingResponse::retry(incoming));
 
-        app.world_mut().entity_mut(incoming).observe(
-            |trigger: Trigger<IncomingError>, mut res: ResMut<HasObserverTriggered>| {
+        wait_for_observer(
+            &mut app,
+            Some(incoming),
+            |trigger: Trigger<IncomingError>| {
                 assert!(matches!(trigger.event(), IncomingError::RetryError));
-                res.0 = true;
             },
+            Some(1),
+            "IncomingError did not trigger",
         );
-
-        app.update();
     }
 
     #[test]
     fn new_incoming() {
         let mut app = app_no_errors();
-        app.init_resource::<HasObserverTriggered>();
 
         let endpoint = endpoint();
         app.world_mut().spawn(endpoint);
@@ -378,11 +381,13 @@ mod tests {
         let connecting = endpoint.connect(addr, "localhost").unwrap();
         app.world_mut().spawn(connecting);
 
-        app.update();
-
-        app.add_observer(test_observer::<NewIncoming, &Incoming>);
-
-        app.update();
+        wait_for_observer(
+            &mut app,
+            None,
+            |_: Trigger<NewIncoming>| {},
+            None,
+            "NewIncoming did not trigger",
+        );
     }
 
     #[test]

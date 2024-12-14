@@ -523,37 +523,45 @@ fn udp_transmit<'a>(transmit: &quinn_proto::Transmit, buffer: &'a [u8]) -> quinn
 
 #[cfg(test)]
 mod tests {
-    use std::net::Ipv6Addr;
+    use std::{
+        net::Ipv6Addr,
+        sync::{Arc, Once},
+    };
 
     use bevy_app::App;
     use bevy_ecs::{
         entity::Entity,
-        event::Events,
+        event::Event,
         observer::Trigger,
-        query::Without,
-        system::{Query, ResMut, Resource},
+        query::With,
+        system::{Local, Query},
     };
-    use bytes::Bytes;
 
     use crate::{
-        connection::{Connecting, Connection, ConnectionEstablished},
+        connection::{Connection, ConnectionEstablished, NewBidirectionalStream},
         incoming::NewIncoming,
         tests::*,
-        Incoming, IncomingResponse,
+        Incoming, IncomingResponse, RecvError,
     };
 
     use super::{Endpoint, EndpointError};
 
-    #[derive(Debug, Resource, Default)]
-    struct ConnectionEstablishedEntities(Vec<Entity>);
+    const CLIENT_TO_SERVER: &[u8] = b"client -> server";
+    const SERVER_TO_CLIENT: &[u8] = b"server -> client";
 
-    #[derive(Debug, Resource, Default)]
-    struct NewIncomingEntities(Vec<Entity>);
+    fn setup_client_and_server() -> (Endpoint, Endpoint) {
+        let addr = (Ipv6Addr::LOCALHOST, 0).into();
+        let (client, server) = generate_crypto();
+
+        (
+            Endpoint::new_client(addr, Some(client)).unwrap(),
+            Endpoint::new_server(addr, server).unwrap(),
+        )
+    }
 
     #[test]
     fn malformed_connection_error() {
         let mut app = app_one_error::<EndpointError>();
-        app.init_resource::<HasObserverTriggered>();
 
         let connections = connection(&mut app);
 
@@ -561,295 +569,316 @@ mod tests {
             .entity_mut(connections.server)
             .remove::<Connection>();
 
-        app.world_mut()
-            .query::<&mut Connection>()
-            .get_mut(app.world_mut(), connections.client)
-            .unwrap()
-            .send_datagram(Bytes::new())
-            .unwrap();
-
-        app.world_mut().entity_mut(connections.endpoint).observe(
-            move |trigger: Trigger<EndpointError>,
-                  endpoint: Query<&Endpoint>,
-                  mut res: ResMut<HasObserverTriggered>| {
-                let _ = endpoint.get(trigger.entity()).unwrap();
+        wait_for_observer(
+            &mut app,
+            Some(connections.endpoint),
+            move |trigger: Trigger<EndpointError>| {
                 assert!(matches!(
                     trigger.event(),
-                    &EndpointError::MalformedConnectionEntity(e) if e == connections.server
+                    &EndpointError::MalformedConnectionEntity(entity) if entity == connections.server
                 ));
-                res.0 = true;
             },
+            None,
+            "EndpointError did not fire",
         );
-
-        app.update();
-        app.update();
     }
 
     #[test]
     fn missing_connection_error() {
         let mut app = app_one_error::<EndpointError>();
-        app.init_resource::<HasObserverTriggered>();
 
         let connections = connection(&mut app);
 
         app.world_mut().entity_mut(connections.server).despawn();
 
-        app.world_mut()
-            .query::<&mut Connection>()
-            .get_mut(app.world_mut(), connections.client)
-            .unwrap()
-            .send_datagram(Bytes::new())
-            .unwrap();
-
-        app.world_mut().entity_mut(connections.endpoint).observe(
-            move |trigger: Trigger<EndpointError>,
-                  endpoint: Query<&Endpoint>,
-                  mut res: ResMut<HasObserverTriggered>| {
-                let _ = endpoint.get(trigger.entity()).unwrap();
+        wait_for_observer(
+            &mut app,
+            Some(connections.endpoint),
+            move |trigger: Trigger<EndpointError>| {
                 assert!(matches!(
                     trigger.event(),
-                    &EndpointError::MissingConnectionEntity(e) if e == connections.server
+                    &EndpointError::MissingConnectionEntity(entity) if entity == connections.server
                 ));
-                res.0 = true;
             },
+            None,
+            "EndpointError did not fire",
         );
-
-        app.update();
-        app.update();
-    }
-
-    fn setup_app() -> App {
-        let mut app = app_no_errors();
-        app.init_resource::<NewIncomingEntities>()
-            .init_resource::<ConnectionEstablishedEntities>()
-            .add_observer(
-                |trigger: Trigger<NewIncoming>, mut entities: ResMut<NewIncomingEntities>| {
-                    entities.0.push(trigger.entity());
-                },
-            )
-            .add_observer(
-                |trigger: Trigger<ConnectionEstablished>,
-                 mut entities: ResMut<ConnectionEstablishedEntities>| {
-                    entities.0.push(trigger.entity())
-                },
-            );
-        app
-    }
-
-    macro_rules! establish_connection {
-        ($client_app:ident, $server_app:ident, $client_endpoint_entity:ident, $server_endpoint_entity:ident) => {{
-            // Get the `SocketAddr` that the client should connect to
-            let server_addr = $server_app
-                .world_mut()
-                .query::<&Endpoint>()
-                .get($server_app.world(), $server_endpoint_entity)
-                .unwrap()
-                .local_addr()
-                .unwrap();
-
-            // Initiate connection from client to server
-            let client_connection = $client_app
-                .world_mut()
-                .query::<&mut Endpoint>()
-                .get_mut($client_app.world_mut(), $client_endpoint_entity)
-                .unwrap()
-                .connect(server_addr, "localhost")
-                .unwrap();
-
-            // Spawn client-side connection
-            let client_connection = $client_app.world_mut().spawn(client_connection).id();
-
-            // Client connection sends packet to server
-            $client_app.update();
-
-            let stats = $client_app
-                .world_mut()
-                .query::<&Connecting>()
-                .get($client_app.world(), client_connection)
-                .unwrap()
-                .stats();
-
-            assert_eq!(stats.udp_tx.datagrams, 1);
-            assert_eq!(stats.frame_tx.crypto, 1);
-            assert_eq!(stats.path.sent_packets, 1);
-
-            // Server reads packet from client and spawns an Incoming
-            $server_app.update();
-
-            let events = $server_app.world().resource::<NewIncomingEntities>();
-            let [server_connection] = events.0[..] else {
-                panic!("NewIncoming should fire once but didn't: {:?}", events);
-            };
-
-            let incoming = $server_app
-                .world_mut()
-                .query::<&Incoming>()
-                .get($server_app.world(), server_connection)
-                .unwrap();
-
-            assert_eq!(incoming.endpoint(), $server_endpoint_entity);
-
-            $server_app
-                .world_mut()
-                .resource_mut::<Events<IncomingResponse>>()
-                .send(IncomingResponse::accept(server_connection));
-
-            // Incoming is replaced with server-side connection, server sends packets to client
-            $server_app.update();
-
-            let stats = $server_app
-                .world_mut()
-                .query_filtered::<&Connecting, Without<Incoming>>()
-                .get($server_app.world(), server_connection)
-                .unwrap()
-                .stats();
-
-            assert_eq!(stats.frame_rx.crypto, 1);
-
-            // Wait for connection to become fully established
-            // TODO: for `two_endpoints_different_worlds`, why are so many updates needed
-            $client_app.update();
-            $server_app.update();
-            $client_app.update();
-            $server_app.update();
-            $client_app.update();
-            $server_app.update();
-
-            (client_connection, server_connection)
-        }};
-    }
-
-    macro_rules! test_datagrams {
-        ($client_app:ident, $server_app:ident, $client_connection_entity:ident, $server_connection_entity:ident) => {{
-            // Confirm that the connections can send data to each other
-            let mut client_connection = $client_app
-                .world_mut()
-                .query::<&mut Connection>()
-                .get_mut($client_app.world_mut(), $client_connection_entity)
-                .expect("0");
-
-            client_connection
-                .send_datagram("datagram client -> server".into())
-                .expect("1");
-
-            let mut server_connection = $server_app
-                .world_mut()
-                .query::<&mut Connection>()
-                .get_mut($server_app.world_mut(), $server_connection_entity)
-                .expect("2");
-
-            server_connection
-                .send_datagram("datagram server -> client".into())
-                .expect("3");
-
-            // Transmit buffered datagrams
-            $client_app.update();
-            $server_app.update();
-            $client_app.update();
-
-            let mut client_connection = $client_app
-                .world_mut()
-                .query::<&mut Connection>()
-                .get_mut($client_app.world_mut(), $client_connection_entity)
-                .expect("4");
-
-            let datagram =
-                String::from_utf8(client_connection.read_datagram().expect("5").to_vec())
-                    .expect("6");
-            assert_eq!(datagram, "datagram server -> client");
-
-            let mut server_connection = $server_app
-                .world_mut()
-                .query::<&mut Connection>()
-                .get_mut($server_app.world_mut(), $server_connection_entity)
-                .expect("7");
-
-            let datagram =
-                String::from_utf8(server_connection.read_datagram().expect("8").to_vec())
-                    .expect("9");
-            assert_eq!(datagram, "datagram client -> server");
-        }};
-    }
-
-    #[test]
-    fn one_endpoint() {
-        let mut app = setup_app();
-        let endpoint = endpoint();
-        let endpoint_entity = app.world_mut().spawn(endpoint).id();
-
-        let (client_connection, server_connection) =
-            establish_connection!(app, app, endpoint_entity, endpoint_entity);
-
-        let connection_established_entities =
-            &app.world().resource::<ConnectionEstablishedEntities>().0;
-
-        // One of these is for the client and the other is for the server, but we don't know which way round they are
-        assert!(
-            connection_established_entities == &[client_connection, server_connection]
-                || connection_established_entities == &[server_connection, client_connection]
-        );
-
-        test_datagrams!(app, app, client_connection, server_connection);
     }
 
     #[test]
     fn two_endpoints_same_world() {
-        let mut app = setup_app();
+        // Setup app and endpoints
+        let mut app = app_no_errors();
 
-        let addr = (Ipv6Addr::LOCALHOST, 0).into();
+        let (client, server) = setup_client_and_server();
 
-        let (client, server) = generate_crypto();
-        let client = Endpoint::new_client(addr, Some(client)).unwrap();
-        let server = Endpoint::new_server(addr, server).unwrap();
+        let client = app.world_mut().spawn(client).id();
+        let server = app.world_mut().spawn(server).id();
 
-        let client_endpoint = app.world_mut().spawn(client).id();
-        let server_endpoint = app.world_mut().spawn(server).id();
+        // Establish connections
+        let server_endpoint = app.world().get::<Endpoint>(server).unwrap();
+        let server_addr = server_endpoint.local_addr().unwrap();
 
-        let (client_connection, server_connection) =
-            establish_connection!(app, app, client_endpoint, server_endpoint);
+        let mut client_endpoint = app.world_mut().get_mut::<Endpoint>(client).unwrap();
+        let client_connection = client_endpoint.connect(server_addr, "localhost").unwrap();
+        let client_connection = app.world_mut().spawn(client_connection).id();
 
-        let connection_established_entities =
-            &app.world().resource::<ConnectionEstablishedEntities>().0;
-
-        // One of these is for the client and the other is for the server, but we don't know which way round they are
-        assert!(
-            connection_established_entities == &[client_connection, server_connection]
-                || connection_established_entities == &[server_connection, client_connection]
+        wait_for_observer(
+            &mut app,
+            None,
+            |_: Trigger<NewIncoming>| {},
+            None,
+            "NewIncoming did not fire",
         );
 
-        test_datagrams!(app, app, client_connection, server_connection);
+        let incoming = app
+            .world_mut()
+            .query_filtered::<Entity, With<Incoming>>()
+            .single_mut(app.world_mut());
+
+        app.world_mut()
+            .send_event(IncomingResponse::accept(incoming));
+
+        wait_for_observer(
+            &mut app,
+            Some(incoming),
+            |_: Trigger<ConnectionEstablished>| {},
+            None,
+            "ConnectionEstablished did not fire",
+        );
+
+        // Open stream and send data
+        let server_connection = incoming;
+
+        let mut client = app
+            .world_mut()
+            .get_mut::<Connection>(client_connection)
+            .unwrap();
+
+        let client_stream = client.open_bi().unwrap();
+        let mut stream = client.send_stream(client_stream).unwrap();
+        stream.write_all(CLIENT_TO_SERVER).unwrap();
+        stream.finish().unwrap();
+
+        wait_for_observer(
+            &mut app,
+            Some(server_connection),
+            |_: Trigger<NewBidirectionalStream>| {},
+            None,
+            "NewBidirectionalStream did not fire",
+        );
+
+        // Send data the other way
+        let mut server = app
+            .world_mut()
+            .get_mut::<Connection>(server_connection)
+            .unwrap();
+        let server_stream = server.accept_bi().unwrap();
+
+        let mut stream = server.send_stream(server_stream).unwrap();
+        stream.write_all(SERVER_TO_CLIENT).unwrap();
+        stream.finish().unwrap();
+
+        // Receive data
+        let system = app.world_mut().register_system(
+            move |mut query: Query<&mut Connection>, mut data: Local<Vec<u8>>| {
+                let mut server = query.get_mut(server_connection).unwrap();
+                let mut stream = server.recv_stream(server_stream).unwrap();
+                match stream.read_chunk(usize::MAX, true) {
+                    Ok(None) => {
+                        assert_eq!(*data, CLIENT_TO_SERVER);
+                        return false;
+                    }
+                    Ok(Some(chunk)) => data.extend_from_slice(&chunk.bytes),
+                    Err(RecvError::Blocked) => {}
+                    Err(e) => panic!("{}", e),
+                }
+                true
+            },
+        );
+
+        while app.world_mut().run_system(system).unwrap() {
+            app.update();
+        }
+
+        // Receive data the other way
+        let system = app.world_mut().register_system(
+            move |mut query: Query<&mut Connection>, mut data: Local<Vec<u8>>| {
+                let mut client = query.get_mut(client_connection).unwrap();
+                let mut stream = client.recv_stream(client_stream).unwrap();
+                match stream.read_chunk(usize::MAX, true) {
+                    Ok(None) => {
+                        assert_eq!(*data, SERVER_TO_CLIENT);
+                        return false;
+                    }
+                    Ok(Some(chunk)) => data.extend_from_slice(&chunk.bytes),
+                    Err(RecvError::Blocked) => {}
+                    Err(e) => panic!("{}", e),
+                }
+                true
+            },
+        );
+
+        while app.world_mut().run_system(system).unwrap() {
+            app.update();
+        }
     }
 
     #[test]
     fn two_endpoints_different_worlds() {
-        let mut client_app = setup_app();
-        let mut server_app = setup_app();
+        // Modified impl to handle this test having two worlds
+        fn wait_for_observer<E: Event>(
+            target: &mut App,
+            other: &mut App,
+            entity: Option<Entity>,
+            otherwise: &str,
+        ) {
+            let has_run = Arc::new(Once::new());
 
-        let addr = (Ipv6Addr::LOCALHOST, 0).into();
+            {
+                let has_run = has_run.clone();
+                if let Some(entity) = entity {
+                    target
+                        .world_mut()
+                        .entity_mut(entity)
+                        .observe(move |_trigger: Trigger<E>| {
+                            has_run.call_once(|| {});
+                        });
+                } else {
+                    target
+                        .world_mut()
+                        .add_observer(move |_trigger: Trigger<E>| {
+                            has_run.call_once(|| {});
+                        });
+                }
+            }
 
-        let (client, server) = generate_crypto();
-        let client = Endpoint::new_client(addr, Some(client)).unwrap();
-        let server = Endpoint::new_server(addr, server).unwrap();
+            for _ in 0..u16::MAX {
+                target.update();
+                other.update();
+                if has_run.is_completed() {
+                    return;
+                }
+            }
 
-        let client_endpoint = client_app.world_mut().spawn(client).id();
-        let server_endpoint = server_app.world_mut().spawn(server).id();
+            panic!("{}", otherwise);
+        }
 
-        let (client_connection, server_connection) =
-            establish_connection!(client_app, server_app, client_endpoint, server_endpoint);
+        // Setup app and endpoints
+        let mut client_app = app_no_errors();
+        let mut server_app = app_no_errors();
 
-        // Each app should have 1 connection established event
-        let established = &client_app
-            .world()
-            .resource::<ConnectionEstablishedEntities>()
-            .0;
-        assert_eq!(established, &[client_connection]);
+        let (client, server) = setup_client_and_server();
 
-        let established = &server_app
-            .world()
-            .resource::<ConnectionEstablishedEntities>()
-            .0;
-        assert_eq!(established, &[server_connection]);
+        let client = client_app.world_mut().spawn(client).id();
+        let server = server_app.world_mut().spawn(server).id();
 
-        test_datagrams!(client_app, server_app, client_connection, server_connection);
+        // Establish connections
+        let server_endpoint = server_app.world().get::<Endpoint>(server).unwrap();
+        let server_addr = server_endpoint.local_addr().unwrap();
+
+        let mut client_endpoint = client_app.world_mut().get_mut::<Endpoint>(client).unwrap();
+        let client_connection = client_endpoint.connect(server_addr, "localhost").unwrap();
+        let client_connection = client_app.world_mut().spawn(client_connection).id();
+
+        wait_for_observer::<NewIncoming>(
+            &mut server_app,
+            &mut client_app,
+            None,
+            "NewIncoming did not fire",
+        );
+
+        let incoming = server_app
+            .world_mut()
+            .query_filtered::<Entity, With<Incoming>>()
+            .single_mut(server_app.world_mut());
+
+        server_app
+            .world_mut()
+            .send_event(IncomingResponse::accept(incoming));
+
+        wait_for_observer::<ConnectionEstablished>(
+            &mut server_app,
+            &mut client_app,
+            Some(incoming),
+            "ConnectionEstablished did not fire",
+        );
+
+        // Open stream and send data
+        let server_connection = incoming;
+
+        let mut client = client_app
+            .world_mut()
+            .get_mut::<Connection>(client_connection)
+            .unwrap();
+
+        let client_stream = client.open_bi().unwrap();
+        let mut stream = client.send_stream(client_stream).unwrap();
+        stream.write_all(CLIENT_TO_SERVER).unwrap();
+        stream.finish().unwrap();
+
+        wait_for_observer::<NewBidirectionalStream>(
+            &mut server_app,
+            &mut client_app,
+            Some(server_connection),
+            "NewBidirectionalStream did not fire",
+        );
+
+        // Send data the other way
+        let mut server = server_app
+            .world_mut()
+            .get_mut::<Connection>(server_connection)
+            .unwrap();
+        let server_stream = server.accept_bi().unwrap();
+
+        let mut stream = server.send_stream(server_stream).unwrap();
+        stream.write_all(SERVER_TO_CLIENT).unwrap();
+        stream.finish().unwrap();
+
+        // Receive data
+        let system = server_app.world_mut().register_system(
+            move |mut query: Query<&mut Connection>, mut data: Local<Vec<u8>>| {
+                let mut server = query.get_mut(server_connection).unwrap();
+                let mut stream = server.recv_stream(server_stream).unwrap();
+                match stream.read_chunk(usize::MAX, true) {
+                    Ok(None) => {
+                        assert_eq!(*data, CLIENT_TO_SERVER);
+                        return false;
+                    }
+                    Ok(Some(chunk)) => data.extend_from_slice(&chunk.bytes),
+                    Err(RecvError::Blocked) => {}
+                    Err(e) => panic!("{}", e),
+                }
+                true
+            },
+        );
+
+        while server_app.world_mut().run_system(system).unwrap() {
+            server_app.update();
+            client_app.update();
+        }
+
+        // Receive data the other way
+        let system = client_app.world_mut().register_system(
+            move |mut query: Query<&mut Connection>, mut data: Local<Vec<u8>>| {
+                let mut client = query.get_mut(client_connection).unwrap();
+                let mut stream = client.recv_stream(client_stream).unwrap();
+                match stream.read_chunk(usize::MAX, true) {
+                    Ok(None) => {
+                        assert_eq!(*data, SERVER_TO_CLIENT);
+                        return false;
+                    }
+                    Ok(Some(chunk)) => data.extend_from_slice(&chunk.bytes),
+                    Err(RecvError::Blocked) => {}
+                    Err(e) => panic!("{}", e),
+                }
+                true
+            },
+        );
+
+        while client_app.world_mut().run_system(system).unwrap() {
+            server_app.update();
+            client_app.update();
+        }
     }
 }

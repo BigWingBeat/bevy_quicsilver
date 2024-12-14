@@ -888,10 +888,7 @@ pub(crate) fn poll_connections(
 
 #[cfg(test)]
 mod tests {
-    use bevy_ecs::{
-        observer::Trigger,
-        system::{Query, ResMut},
-    };
+    use bevy_ecs::{observer::Trigger, system::Query};
     use bytes::Bytes;
     use quinn_proto::crypto::rustls::HandshakeData;
 
@@ -899,7 +896,8 @@ mod tests {
 
     use super::{
         Connecting, ConnectingError, Connection, ConnectionAccepted, ConnectionDrained,
-        ConnectionError, ConnectionEstablished, HandshakeDataReady,
+        ConnectionError, ConnectionEstablished, HandshakeDataReady, NewBidirectionalStream,
+        NewUnidirectionalStream,
     };
 
     #[test]
@@ -933,7 +931,6 @@ mod tests {
     #[test]
     fn connection_error() {
         let mut app = app_one_error::<ConnectionError>();
-        app.init_resource::<HasObserverTriggered>();
 
         let connections = connection(&mut app);
 
@@ -945,72 +942,136 @@ mod tests {
 
         server.close(0u8.into(), Bytes::new());
 
-        app.world_mut()
-            .entity_mut(connections.client)
-            .observe(test_observer::<ConnectionError, &Connection>);
-
-        app.update();
-        app.update();
+        wait_for_observer(
+            &mut app,
+            Some(connections.client),
+            |trigger: Trigger<ConnectionError>| {
+                assert!(matches!(
+                    trigger.event(),
+                    ConnectionError::Lost(quinn_proto::ConnectionError::ApplicationClosed(_))
+                ));
+            },
+            None,
+            "ConnectionError did not fire after peer connection closed",
+        );
     }
 
     #[test]
     fn connecting_error() {
         let mut app = app_one_error::<ConnectingError>();
-        app.init_resource::<HasObserverTriggered>();
 
         let connections = incoming(&mut app);
 
         app.world_mut()
             .send_event(IncomingResponse::refuse(connections.server));
 
-        app.world_mut()
-            .entity_mut(connections.client)
-            .observe(test_observer::<ConnectingError, &Connecting>);
-
-        app.update();
-        app.update();
+        wait_for_observer(
+            &mut app,
+            Some(connections.client),
+            |trigger: Trigger<ConnectingError>| {
+                assert!(matches!(
+                    trigger.event(),
+                    ConnectingError::Lost(quinn_proto::ConnectionError::ConnectionClosed(_))
+                ));
+            },
+            None,
+            "ConnectingError did not fire for client after server rejected incoming",
+        );
     }
 
     #[test]
     fn connection_accepted() {
         let mut app = app_no_errors();
-        app.init_resource::<HasObserverTriggered>();
 
         let server = incoming(&mut app).server;
 
         app.world_mut().send_event(IncomingResponse::accept(server));
 
-        app.world_mut()
-            .entity_mut(server)
-            .observe(test_observer::<ConnectionAccepted, &Connecting>);
-
-        app.update();
+        wait_for_observer(
+            &mut app,
+            Some(server),
+            |_: Trigger<ConnectionAccepted>| {},
+            Some(1),
+            "ConnectionAccepted did not fire",
+        );
     }
 
     #[test]
     fn connection_established() {
         let mut app = app_no_errors();
-        app.init_resource::<HasObserverTriggered>();
 
         let server = incoming(&mut app).server;
 
         app.world_mut().send_event(IncomingResponse::accept(server));
 
-        app.update();
-        app.update();
+        wait_for_observer(
+            &mut app,
+            Some(server),
+            |_: Trigger<ConnectionAccepted>| {},
+            Some(1),
+            "ConnectionAccepted did not fire",
+        );
 
-        app.world_mut()
-            .entity_mut(server)
-            .observe(test_observer::<ConnectionEstablished, &Connection>);
+        wait_for_observer(
+            &mut app,
+            Some(server),
+            |_: Trigger<ConnectionEstablished>| {},
+            None,
+            "ConnectionEstablished did not fire",
+        );
+    }
 
-        app.update();
+    #[test]
+    fn new_bidirectional_stream() {
+        let mut app = app_no_errors();
+
+        let entities = connection(&mut app);
+
+        let mut server = app
+            .world_mut()
+            .get_mut::<Connection>(entities.server)
+            .unwrap();
+
+        let stream = server.open_bi().unwrap();
+        let mut stream = server.send_stream(stream).unwrap();
+        stream.write_chunk(Bytes::new()).unwrap();
+
+        wait_for_observer(
+            &mut app,
+            Some(entities.client),
+            |_: Trigger<NewBidirectionalStream>| {},
+            None,
+            "NewBidirectionalStream did not fire",
+        );
+    }
+
+    #[test]
+    fn new_unidirectional_stream() {
+        let mut app = app_no_errors();
+
+        let entities = connection(&mut app);
+
+        let mut server = app
+            .world_mut()
+            .get_mut::<Connection>(entities.server)
+            .unwrap();
+
+        let mut stream = server.open_uni().unwrap();
+        stream.write_chunk(Bytes::new()).unwrap();
+
+        wait_for_observer(
+            &mut app,
+            Some(entities.client),
+            |_: Trigger<NewUnidirectionalStream>| {},
+            None,
+            "NewUnidirectionalStream did not fire",
+        );
     }
 
     #[test]
     fn connection_drained() {
         // Exclude ConnectionError because it fires when connection closes
         let mut app = app_one_error::<ConnectionError>();
-        app.init_resource::<HasObserverTriggered>();
 
         let server = connection(&mut app).server;
 
@@ -1022,14 +1083,14 @@ mod tests {
 
         connection.close(0u8.into(), Bytes::new());
 
-        app.world_mut()
-            .entity_mut(server)
-            .observe(test_observer::<ConnectionDrained, &Connection>);
-
         // Wait for the drain timeout to elapse
-        while !app.world().resource::<HasObserverTriggered>().0 {
-            app.update();
-        }
+        wait_for_observer(
+            &mut app,
+            Some(server),
+            |_: Trigger<ConnectionDrained>| {},
+            None,
+            "ConnectionDrained did not fire",
+        );
 
         // Connections should despawn after draining
         assert!(app
@@ -1041,24 +1102,22 @@ mod tests {
     #[test]
     fn handshake_data_ready() {
         let mut app = app_no_errors();
-        app.init_resource::<HasObserverTriggered>();
 
         let server = incoming(&mut app).server;
 
         app.world_mut().send_event(IncomingResponse::accept(server));
 
-        app.world_mut().entity_mut(server).observe(
-            |trigger: Trigger<HandshakeDataReady>,
-             connecting: Query<&Connecting>,
-             mut res: ResMut<HasObserverTriggered>| {
-                let connecting = connecting.get(trigger.entity()).unwrap();
+        wait_for_observer(
+            &mut app,
+            Some(server),
+            |trigger: Trigger<HandshakeDataReady>, query: Query<&Connecting>| {
+                let connecting = query.get(trigger.entity()).unwrap();
                 let data = connecting.handshake_data().unwrap();
                 let data = data.downcast::<HandshakeData>().unwrap();
                 assert_eq!(data.server_name, Some("localhost".into()));
-                res.0 = true;
             },
+            Some(1),
+            "HandshakeDataReady did not fire",
         );
-
-        app.update();
     }
 }
