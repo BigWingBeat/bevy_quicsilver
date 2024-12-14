@@ -797,7 +797,6 @@ dependencies = [
  "rcgen",
  "ring",
  "rustls",
- "rustls-platform-verifier",
  "serde",
  "thiserror 2.0.6",
  "x509-parser",

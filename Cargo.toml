@@ -10,20 +10,31 @@ keywords = ["bevy", "quic", "gamedev", "networking"]
 categories = ["game-development", "network-programming"]
 
 [dependencies]
+# Core ecs dependencies
 bevy_app = { version = "0.15", default-features = false }
 bevy_ecs = { version = "0.15", default-features = false }
+# For handling quic timeouts in ecs systems
 bevy_time = { version = "0.15", default-features = false }
+# For efficient socket reading in a task
 bevy_tasks = { version = "0.15", default-features = false, features = ["async-io"] }
 async-io = "2.4"
+# For passing data from the aforementioned task into the ecs
 crossbeam-channel = "0.5"
+# Faster than std hashmap
 hashbrown = "0.15"
+# Part of quinn-proto's API, used for moving data around without copying
 bytes = "1.9"
+# Custom error types
 thiserror = "2.0"
+# Core dependency; sans-I/O implementation of QUIC
 quinn-proto = { version = "0.11", default-features = false, features = ["rustls"] }
+# For plugging actual I/O into aforementioned sans-I/O impl
 quinn-udp = { version = "0.5", default-features = false }
+# For crypto stuff
 rustls = { version = "0.23", default-features = false, features = ["logging", "std", "ring"] }
+# For producing cert digests for TOFU verification
 ring = { version = "0.17", default-features = false }
-rcgen = { version = "0.13", default-features = false, features = ["crypto", "ring"] }
+# For parsing cert validity for TOFU verification
 x509-parser = { version = "0.16", default-features = false }
 
 [features]
@@ -32,11 +43,11 @@ platform_verifier = ["quinn-proto/platform-verifier"]
 multi_threaded = ["bevy_tasks/multi_threaded"]
 
 [dev-dependencies]
+# For generating self-signed certificates for tests and examples
+rcgen = { version = "0.13", default-features = false, features = ["crypto", "ring"] }
+
 # For writing and reading self-signed certificates in examples
 directories = "5.0"
-
-# For constructing a server certificate verifier in examples
-rustls-platform-verifier = "0.4"
 
 # For client & server examples
 bevy_state = { version = "0.15", default-features = false, features = ["bevy_app"] }
