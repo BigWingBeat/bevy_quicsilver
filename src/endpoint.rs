@@ -24,7 +24,7 @@ use crate::{
     connection::ConnectionQuery,
     incoming::Incoming,
     socket::{UdpSocket, UdpSocketRecvDriver},
-    Connecting, KeepAlive, KeepAliveEntityCommandsExt,
+    Connecting, KeepAlive, KeepAliveEntityCommandsExt, NewIncoming,
 };
 
 /// An observer trigger that is fired when an [`Endpoint`] encounters an error.
@@ -478,7 +478,9 @@ pub(crate) fn poll_endpoints(
                         }
                     }
                     DatagramEvent::NewConnection(incoming) => {
-                        commands.spawn(Incoming::new(incoming, endpoint_entity));
+                        commands
+                            .spawn(Incoming::new(incoming, endpoint_entity))
+                            .trigger(NewIncoming);
                     }
                     DatagramEvent::Response(transmit) => {
                         transmits.push((transmit, event.response_buffer));

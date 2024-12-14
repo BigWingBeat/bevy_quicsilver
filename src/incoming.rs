@@ -4,7 +4,7 @@ use std::{
 };
 
 use bevy_ecs::{
-    component::{Component, ComponentHooks, StorageType},
+    component::Component,
     entity::Entity,
     event::{Event, EventReader},
     system::SystemState,
@@ -142,21 +142,10 @@ impl IncomingResponse {
 /// }
 /// # assert_is_system(my_observer);
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Component)]
 pub struct Incoming {
     incoming: quinn_proto::Incoming,
     endpoint_entity: Entity,
-}
-
-impl Component for Incoming {
-    const STORAGE_TYPE: StorageType = StorageType::Table;
-
-    fn register_component_hooks(hooks: &mut ComponentHooks) {
-        // TODO: Move trigger to endpoint spawn command, so it doesn't trigger from user moving the incoming between entities
-        hooks.on_add(|mut world, entity, _component_id| {
-            world.trigger_targets(NewIncoming, entity);
-        });
-    }
 }
 
 impl Incoming {
