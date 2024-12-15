@@ -15,6 +15,8 @@ bevy_app = { version = "0.15", default-features = false }
 bevy_ecs = { version = "0.15", default-features = false }
 # For handling quic timeouts in ecs systems
 bevy_time = { version = "0.15", default-features = false }
+# For `TaskPoolPlugin`, to ensure task pools are initialized and ticked
+bevy_core = { version = "0.15", default-features = false }
 # For efficient socket reading in a task
 bevy_tasks = { version = "0.15", default-features = false, features = ["async-io"] }
 async-io = "2.4"
@@ -42,7 +44,6 @@ rcgen = { version = "0.13", default-features = false, features = ["crypto", "rin
 [features]
 default = ["platform_verifier"]
 platform_verifier = ["quinn-proto/platform-verifier"]
-multi_threaded = ["bevy_tasks/multi_threaded"]
 rcgen_cert = ["dep:rcgen"]
 
 [dev-dependencies]
@@ -56,7 +57,14 @@ directories = "5.0"
 bevy_state = { version = "0.15", default-features = false, features = ["bevy_app"] }
 
 # For digger demo example
-bevy = { version = "0.15", default-features = false, features = ["x11", "bevy_winit", "bevy_ui", "bevy_state", "default_font"] }
+bevy = { version = "0.15", default-features = false, features = [
+	"x11",
+	"bevy_winit",
+	"bevy_ui",
+	"bevy_state",
+	"default_font",
+	# "multi_threaded",
+] }
 bevy_simple_text_input = "0.10"
 # bevy_ecs_tilemap = { path = "../../bevy_ecs_tilemap" }
 anyhow = "1.0"

@@ -11,7 +11,7 @@ use bevy_ecs::{
     query::{Has, QueryEntityError},
     system::{Commands, Query},
 };
-use bevy_tasks::TaskPool;
+use bevy_tasks::IoTaskPool;
 use crossbeam_channel::Receiver;
 use hashbrown::HashMap;
 use quinn_proto::{
@@ -217,9 +217,7 @@ impl Endpoint {
                 sender,
             );
 
-            bevy_tasks::IoTaskPool::get_or_init(TaskPool::new)
-                .spawn(driver)
-                .detach();
+            IoTaskPool::get().spawn(driver).detach();
 
             Self {
                 self_entity: Entity::PLACEHOLDER,

@@ -1,4 +1,5 @@
 use bevy_app::{App, Plugin, PostUpdate, PreUpdate};
+use bevy_core::TaskPoolPlugin;
 use bevy_ecs::schedule::IntoSystemConfigs;
 use bevy_time::TimePlugin;
 
@@ -8,6 +9,13 @@ use crate::{
 };
 
 /// The library plugin. Adding this to your [`App`] is the first thing to do when using this library.
+///
+/// ## Plugin Dependencies
+///
+/// `QuicPlugin` depends on two of Bevy's built-in plugins, and will automatically add them to the `App`
+/// if they have not already been added:
+/// - [`TimePlugin`]
+/// - [`TaskPoolPlugin`]
 ///
 /// # Usage
 /// ```
@@ -27,6 +35,10 @@ impl Plugin for QuicPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<TimePlugin>() {
             app.add_plugins(TimePlugin);
+        }
+
+        if !app.is_plugin_added::<TaskPoolPlugin>() {
+            app.add_plugins(TaskPoolPlugin::default());
         }
 
         // System ordering assumes relevant user code runs in Update
